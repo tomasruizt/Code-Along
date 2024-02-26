@@ -27,12 +27,6 @@ with st.echo():
         d_coupons = face_value * coupon_rate * (1 - (1 + r) ** -T) / r
         return d_face_value + d_coupons
 
-maturity = st.slider("Maturity (years)", min_value=1, max_value=30, value=15)
-discount_rate = st.slider("Discount rate [%]", min_value=0.0, max_value=6.0, value=coupon_rate * 100, step=0.5) / 100
-
-st.write("##### The bond price is", round(bond_price(maturity, discount_rate), 2))
-st.markdown(f"An intersting observation: If the discount rate (currently {discount_rate:.2f}) is equal to the coupon rate ({coupon_rate:.2f}), the bond price is equal to the face value, no matter the maturity.")
-
 st.markdown(
     """
     ## Sensitivity to interest rate
@@ -41,7 +35,17 @@ st.markdown(
     """
 )
 
+plot_container = st.container()
+col1, col2 = st.columns(2)
 
+with col1:
+    maturity = st.slider("Maturity (years)", min_value=1, max_value=30, value=15)
+with col2:
+    discount_rate = st.slider("Discount rate [%]", min_value=0.0, max_value=6.0, value=coupon_rate * 100, step=0.5) / 100
+resulting_bond_price = bond_price(maturity, discount_rate)
+
+st.write("##### The bond price is", round(resulting_bond_price, 2))
+st.markdown(f"An intersting observation: If the discount rate (currently {discount_rate:.2f}) is equal to the coupon rate ({coupon_rate:.2f}), the bond price is equal to the face value, no matter the maturity.")
 
 # Create a range of interest rate increases
 increases = np.linspace(-coupon_rate + 0.001, 0.06, 100)
@@ -57,8 +61,8 @@ ax.grid(True)
 # plot the curves with viridis color map, and add a legend
 for i, maturity in enumerate(maturities):
     ax.plot(increases * 100, prices[i], label=f"Maturity {maturity} years", color=plt.cm.viridis(i / len(maturities)))
+ax.scatter((discount_rate - coupon_rate)*100, resulting_bond_price, color="r")
 ax.legend()
-st.pyplot(fig)
 
-
-
+with plot_container:
+    st.pyplot(fig)
