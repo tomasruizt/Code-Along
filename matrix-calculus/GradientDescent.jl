@@ -34,6 +34,8 @@ function opt(initial_params, update_fn, err_fn, x_fn; n_iterations = 1000)
     end
 
     errors = [e.val for e in errors] # convert to Float64
+    xs = hcat([[a.val for a in x] for x in xs]...)'
+    params = hcat([[a.val for a in p] for p in params]...)'
     return errors, xs, params
 end
 
