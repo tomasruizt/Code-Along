@@ -10,7 +10,7 @@ $$
 
 This leads to the linearization formula:
 
-## Revistit: Linearization Formula
+## Revisit: Linearization Formula
 We drop all terms of order greater than 1:
 
 $$
@@ -113,6 +113,23 @@ A(p) x(p) &= b(p) \\
 \end{align*}
 $$
 
+# Derivatives of ODE solutions
+### 11.2.2 Forward sensitivity analysis of ODEs
+Imagine a ODE defined by as below, where $u$ is the ODE solution, and $p$ are ODE parameters.
+$$
+\frac{\partial u}{\partial t} = f(u, t, p)
+$$
+The solution $u$ could be used in a follow-up step in a loss function $g(u)$, e.g. to fit the ODE parameters $p$ to some experimental data. Therefore, we want to optimize the parameters $p$, to minimize $g(u)$, but have no analytic formula of $u$ on $p$ to compute $\frac{\partial u}{\partial p}.$
+
+First question: What is the differential $df$?
+$$df = \underbrace{f'}_{\text{wrt. }p} dp = (f_u u_p + f_p) dp$$
+where $f_i = \frac{\partial f}{\partial i}$.
+
+Also $f = u_t$, so $f' = (u_t)_p = (u_p)_t$. So the new ODE is:
+$$
+(u_p)_t = f_u u_p + f_p
+$$
+
 # Examples
 ## Example 1
 Given $f(x) = x^Tx$, compute the the differential $df$, at $x_0$ = [3, 4].
@@ -125,7 +142,7 @@ df & = d(x^T)x + x^Td(x) \\
 
 \implies df(x_0) & = 2x_0^Tdx \\ \\
 
-\implies df & = 2 <x, dx> \\
+\implies df & = 2 \langle x, dx \rangle \\
 \implies \nabla f &= 2x  \\
 \end{align*}
 $$
