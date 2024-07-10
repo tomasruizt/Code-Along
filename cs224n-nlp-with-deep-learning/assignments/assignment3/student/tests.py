@@ -1,6 +1,7 @@
 from utils import pad_sents
 from model_embeddings import ModelEmbeddings, EmbeddingDims
 from vocab import VocabEntry, Vocab
+from nmt_model import NMT
 from torch.nn import Embedding
 
 def test_pad_sents():
@@ -27,9 +28,10 @@ def some_vocab() -> Vocab:
     unkown_token = "<unk>"
     src_vocab = VocabEntry({"a":0, "b":1, unkown_token:2})
     tgt_vocab = VocabEntry({"c":0, "d":1, "e": 2, unkown_token:3})
-    embed_dim = 5
-    m = ModelEmbeddings(embed_size=embed_dim, vocab=Vocab(src_vocab, tgt_vocab))
-    assert isinstance(m.source, Embedding)
-    assert m.source.weight.shape == (len(src_vocab), embed_dim)
-    assert m.target.weight.shape == (len(tgt_vocab), embed_dim)
-    assert isinstance(m.target, Embedding)
+    return Vocab(src_vocab, tgt_vocab)
+
+def test_c_and_d():
+    m = NMT(embed_size=5, hidden_size=6, vocab=some_vocab())
+    source = [["a", "b", "b"], ["b", "a"]]
+    target = [["c"], ["c"]]
+    m(source, target)

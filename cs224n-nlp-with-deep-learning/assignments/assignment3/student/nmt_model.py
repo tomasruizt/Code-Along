@@ -19,8 +19,10 @@ import torch.nn as nn
 import torch.nn.utils
 import torch.nn.functional as F
 from torch.nn.utils.rnn import pad_packed_sequence, pack_padded_sequence
+import torch.utils
 
 from model_embeddings import ModelEmbeddings
+from vocab import Vocab
 
 Hypothesis = namedtuple('Hypothesis', ['value', 'score'])
 
@@ -32,7 +34,7 @@ class NMT(nn.Module):
         - Global Attention Model (Luong, et al. 2015)
     """
 
-    def __init__(self, embed_size, hidden_size, vocab, dropout_rate=0.2):
+    def __init__(self, embed_size, hidden_size, vocab: Vocab, dropout_rate=0.2):
         """ Init NMT Model.
 
         @param embed_size (int): Embedding size (dimensionality)
@@ -85,9 +87,15 @@ class NMT(nn.Module):
         ###         https://pytorch.org/docs/stable/generated/torch.nn.Linear.html
         ###     Dropout Layer:
         ###         https://pytorch.org/docs/stable/generated/torch.nn.Dropout.html
-
-
-
+        self.post_embed_cnn = nn.Conv1d(in_channels=embed_size, out_channels=embed_size, kernel_size=2, padding="same")
+        self.encoder = nn.LSTM(input_size=embed_size, hidden_size=hidden_size, bias=True, bidirectional=True)
+        self.decoder = nn.LSTMCell(input_size=embed_size, hidden_size=hidden_size, bias=True)
+        self.h_projection = nn.Linear(in_features=2 * hidden_size, out_features=hidden_size, bias=False)
+        self.c_projection = nn.Linear(in_features=2 * hidden_size, out_features=hidden_size, bias=False)
+        self.att_projection = nn.Linear(in_features=2 * hidden_size, out_features=hidden_size, bias=False)
+        self.combined_output_projection = nn.Linear(in_features=3 * hidden_size, out_features=hidden_size, bias=False)
+        self.target_vocab_projection = nn.Linear(in_features=hidden_size, out_features=len(vocab.tgt), bias=False)
+        self.dropout = nn.Dropout(p=dropout_rate)
         ### END YOUR CODE
 
     def forward(self, source: List[List[str]], target: List[List[str]]) -> torch.Tensor:
@@ -150,14 +158,30 @@ class NMT(nn.Module):
         ###     1. Construct Tensor `X` of source sentences with shape (src_len, b, e) using the source model embeddings.
         ###         src_len = maximum source sentence length, b = batch size, e = embedding size. Note
         ###         that there is no initial hidden state or cell for the encoder.
+        src_len, b = source_padded.shape
+        e = self.model_embeddings.dims().embed_size
+        h = self.hidden_size
+        
+        X = self.model_embeddings.source(source_padded)
+        assert X.shape == (src_len, b, e), X.shape
         ###     2. Apply the post_embed_cnn layer. Before feeding X into the CNN, first use torch.permute to change the
         ###         shape of X to (b, e, src_len). After getting the output from the CNN, remember to use torch.permute
         ###         again to revert X back to its original shape.
+        X2 = torch.permute(X, (1, 2, 0))
+        assert X2.shape == (b, e, src_len), X2.shape
+        X3 = self.post_embed_cnn(X2)
+        X4 = torch.permute(X3, (2, 0, 1))
+        assert X4.shape == X.shape, X4.shape
         ###     3. Compute `enc_hiddens`, `last_hidden`, `last_cell` by applying the encoder to `X`.
         ###         - Before you can apply the encoder, you need to apply the `pack_padded_sequence` function to X.
         ###         - After you apply the encoder, you need to apply the `pad_packed_sequence` function to enc_hiddens.
         ###         - Note that the shape of the tensor returned by the encoder is (src_len, b, h*2) and we want to
         ###           return a tensor of shape (b, src_len, h*2) as `enc_hiddens`.
+        packed = pack_padded_sequence(X4, lengths=source_lengths)
+        enc_hiddens, (last_hidden, last_cell) = self.encoder(packed)
+        enc_hiddens, _ = pad_packed_sequence(enc_hiddens)
+        enc_hiddens = torch.permute(enc_hiddens, (1, 0, 2))
+        assert enc_hiddens.shape == (b, src_len, 2 * h), enc_hiddens.shape
         ###     4. Compute `dec_init_state` = (init_decoder_hidden, init_decoder_cell):
         ###         - `init_decoder_hidden`:
         ###             `last_hidden` is a tensor shape (2, b, h). The first dimension corresponds to forwards and backwards.
@@ -169,7 +193,18 @@ class NMT(nn.Module):
         ###             Concatenate the forwards and backwards tensors to obtain a tensor shape (b, 2*h).
         ###             Apply the c_projection layer to this in order to compute init_decoder_cell.
         ###             This is c_0^{dec} in the PDF. Here b = batch size, h = hidden size
-        ###
+        last_hidden = torch.concat((last_hidden[0], last_hidden[1]), dim=1)
+        assert last_hidden.shape == (b, 2*h), last_hidden.shape
+        h_dec_0 = init_decoder_hidden = self.h_projection(last_hidden)
+
+        last_cell  = torch.concat((last_cell[0], last_cell[1]), dim=1)
+        assert last_cell.shape == (b, 2*h), last_cell.shape
+        c_dec_0 = init_decoder_cell = self.c_projection(last_cell)
+        
+        assert h_dec_0.shape == (b, h), h_dec_0.shape
+        assert c_dec_0.shape == (b, h), c_dec_0.shape
+
+        dec_init_state = (h_dec_0, c_dec_0)
         ### See the following docs, as you may need to use some of the following functions in your implementation:
         ###     Pack the padded sequence X before passing to the encoder:
         ###         https://pytorch.org/docs/stable/generated/torch.nn.utils.rnn.pack_padded_sequence.html
@@ -179,13 +214,7 @@ class NMT(nn.Module):
         ###         https://pytorch.org/docs/stable/generated/torch.cat.html
         ###     Tensor Permute:
         ###         https://pytorch.org/docs/stable/generated/torch.permute.html
-
-
-
-
-
         ### END YOUR CODE
-
         return enc_hiddens, dec_init_state
 
     def decode(self, enc_hiddens: torch.Tensor, enc_masks: torch.Tensor,
