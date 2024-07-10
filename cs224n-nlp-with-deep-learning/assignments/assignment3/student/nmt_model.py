@@ -251,6 +251,36 @@ class NMT(nn.Module):
         ###         which should be shape (b, src_len, h),
         ###         where b = batch size, src_len = maximum source length, h = hidden size.
         ###         This is applying W_{attProj} to h^enc, as described in the PDF.
+        b = batch_size
+        h = self.hidden_size
+        m = src_len = enc_hiddens.size(1)
+        h_dec_t, c_dec_t = dec_state
+
+        mul = self.att_projection(enc_hiddens)
+        assert mul.shape == (b, m, h), mul.shape
+        
+        e_t = []
+        for i in range(m):
+            W_h_enc_i = mul[:, i, :]
+            e_t_i = (W_h_enc_i * h_dec_t).sum(1)
+            e_t.append(e_t_i)
+        e_t = torch.stack(e_t).T
+        assert e_t.shape == (b, m), e_t.shape
+        alpha_t = F.softmax(e_t, dim=1)
+
+        agg = []
+        for i in range(m):
+            summand = alpha_t[:, i].view(b, 1) * enc_hiddens[:, i, :]
+            agg.append(summand)
+        a_t = sum(agg)
+        assert a_t.shape == (b, 2 * h), a_t.shape
+
+        raise NotImplementedError
+        # Vectorized
+        # e = (self.att_projection(enc_hiddens) * h_dec_0.view(b, 1, h)).sum(2)
+        # alpha = F.softmax(e, dim=1)
+
+        
         ###     2. Construct tensor `Y` of target sentences with shape (tgt_len, b, e) using the target model embeddings.
         ###         where tgt_len = maximum target sentence length, b = batch size, e = embedding size.
         ###     3. Use the torch.split function to iterate over the time dimension of Y.
