@@ -1,5 +1,5 @@
 from utils import pad_sents
-from model_embeddings import ModelEmbeddings
+from model_embeddings import ModelEmbeddings, EmbeddingDims
 from vocab import VocabEntry, Vocab
 from torch.nn import Embedding
 
@@ -9,6 +9,21 @@ def test_pad_sents():
 
 
 def test_b():
+    embed_dim = 5
+    vocab = some_vocab()
+    m = ModelEmbeddings(embed_size=embed_dim, vocab=vocab)
+    assert isinstance(m.source, Embedding)
+    assert isinstance(m.target, Embedding)
+    
+    expected_dims = EmbeddingDims(
+        embed_size=embed_dim,
+        src_vocab_size=len(vocab.src),
+        tgt_vocab_size=len(vocab.tgt)
+    )
+    assert m.dims() == expected_dims
+
+
+def some_vocab() -> Vocab:
     unkown_token = "<unk>"
     src_vocab = VocabEntry({"a":0, "b":1, unkown_token:2})
     tgt_vocab = VocabEntry({"c":0, "d":1, "e": 2, unkown_token:3})

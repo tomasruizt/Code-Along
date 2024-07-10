@@ -11,9 +11,15 @@ Vera Lin <veralin@stanford.edu>
 Siyan Li <siyanli@stanford.edu>
 """
 
+from typing import NamedTuple
 import torch.nn as nn
 
 from vocab import Vocab
+
+class EmbeddingDims(NamedTuple):
+    embed_size: int
+    src_vocab_size: int
+    tgt_vocab_size: int
 
 class ModelEmbeddings(nn.Module): 
     """
@@ -29,6 +35,7 @@ class ModelEmbeddings(nn.Module):
         """
         super(ModelEmbeddings, self).__init__()
         self.embed_size = embed_size
+        self.vocab = vocab
 
         # default values
         self.source = None
@@ -60,4 +67,9 @@ class ModelEmbeddings(nn.Module):
 
         ### END YOUR CODE
 
-
+    def dims(self):
+        return EmbeddingDims(
+            embed_size=self.embed_size, 
+            src_vocab_size=len(self.vocab.src),
+            tgt_vocab_size=len(self.vocab.tgt)
+        )
