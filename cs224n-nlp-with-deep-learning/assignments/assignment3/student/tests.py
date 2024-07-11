@@ -33,5 +33,5 @@ def some_vocab() -> Vocab:
 def test_c_d_e_f():
     m = NMT(embed_size=5, hidden_size=6, vocab=some_vocab())
     source = [["a", "b", "b"], ["b", "a"]]
-    target = [["c", "</s>"], ["c", "</s>"]]
+    target = [["c", "d", "c", "</s>"], ["e", "</s>"]]
     m(source, target)
