@@ -89,7 +89,7 @@ class NMT(nn.Module):
         ###         https://pytorch.org/docs/stable/generated/torch.nn.Dropout.html
         self.post_embed_cnn = nn.Conv1d(in_channels=embed_size, out_channels=embed_size, kernel_size=2, padding="same")
         self.encoder = nn.LSTM(input_size=embed_size, hidden_size=hidden_size, bias=True, bidirectional=True)
-        self.decoder = nn.LSTMCell(input_size=embed_size, hidden_size=hidden_size, bias=True)
+        self.decoder = nn.LSTMCell(input_size=embed_size + hidden_size, hidden_size=hidden_size, bias=True)
         self.h_projection = nn.Linear(in_features=2 * hidden_size, out_features=hidden_size, bias=False)
         self.c_projection = nn.Linear(in_features=2 * hidden_size, out_features=hidden_size, bias=False)
         self.att_projection = nn.Linear(in_features=2 * hidden_size, out_features=hidden_size, bias=False)
@@ -258,29 +258,6 @@ class NMT(nn.Module):
 
         mul = self.att_projection(enc_hiddens)
         assert mul.shape == (b, m, h), mul.shape
-        
-        e_t = []
-        for i in range(m):
-            W_h_enc_i = mul[:, i, :]
-            e_t_i = (W_h_enc_i * h_dec_t).sum(1)
-            e_t.append(e_t_i)
-        e_t = torch.stack(e_t).T
-        assert e_t.shape == (b, m), e_t.shape
-        alpha_t = F.softmax(e_t, dim=1)
-
-        agg = []
-        for i in range(m):
-            summand = alpha_t[:, i].view(b, 1) * enc_hiddens[:, i, :]
-            agg.append(summand)
-        a_t = sum(agg)
-        assert a_t.shape == (b, 2 * h), a_t.shape
-
-        raise NotImplementedError
-        # Vectorized
-        # e = (self.att_projection(enc_hiddens) * h_dec_0.view(b, 1, h)).sum(2)
-        # alpha = F.softmax(e, dim=1)
-
-        
         ###     2. Construct tensor `Y` of target sentences with shape (tgt_len, b, e) using the target model embeddings.
         ###         where tgt_len = maximum target sentence length, b = batch size, e = embedding size.
         ###     3. Use the torch.split function to iterate over the time dimension of Y.
@@ -310,14 +287,21 @@ class NMT(nn.Module):
         ###         https://pytorch.org/docs/stable/generated/torch.cat.html
         ###     Tensor Stacking:
         ###         https://pytorch.org/docs/stable/generated/torch.stack.html
-
-
-
-
-
-
+        Y = self.model_embeddings.target(target_padded)
+        for i in range(Y.size(0)):
+            Y_t = Y[i, ...]
+            Y_bar_t = torch.concat([Y_t, o_prev], dim=1)
+            dec_state, combined_output, e_t = self.step(
+                Ybar_t=Y_bar_t,
+                dec_state=(h_dec_t, c_dec_t),
+                enc_hiddens=enc_hiddens,
+                enc_hiddens_proj=mul,
+                enc_masks=enc_masks
+            )
+            combined_outputs.append(combined_output)
+            o_prev = combined_output
+        combined_outputs = torch.stack(combined_outputs)
         ### END YOUR CODE
-
         return combined_outputs
 
     def step(self, Ybar_t: torch.Tensor,
@@ -371,8 +355,8 @@ class NMT(nn.Module):
         ###         https://pytorch.org/docs/stable/generated/torch.unsqueeze.html
         ###     Tensor Squeeze:
         ###         https://pytorch.org/docs/stable/generated/torch.squeeze.html
-
-
+        dec_hidden, dec_cell = dec_state = self.decoder(Ybar_t, dec_state)
+        e_t = torch.einsum("bmh, bh -> bm", enc_hiddens_proj, dec_hidden)
         ### END YOUR CODE
 
         # Set e_t to -inf where enc_masks has 1
@@ -405,8 +389,11 @@ class NMT(nn.Module):
         ###         https://pytorch.org/docs/stable/generated/torch.cat.html
         ###     Tanh:
         ###         https://pytorch.org/docs/stable/generated/torch.tanh.html
-
-
+        alpha_t = F.softmax(e_t, dim=1)
+        a_t = torch.einsum("bmd, bm -> bd", enc_hiddens, alpha_t)
+        U_t = torch.cat([a_t, dec_hidden], dim=1)
+        V_t = self.combined_output_projection(U_t)
+        O_t = self.dropout(torch.tanh(V_t))
         ### END YOUR CODE
 
         combined_output = O_t

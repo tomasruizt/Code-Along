@@ -30,8 +30,8 @@ def some_vocab() -> Vocab:
     tgt_vocab = VocabEntry({"c":0, "d":1, "e": 2, unkown_token:3})
     return Vocab(src_vocab, tgt_vocab)
 
-def test_c_and_d():
+def test_c_d_e_f():
     m = NMT(embed_size=5, hidden_size=6, vocab=some_vocab())
     source = [["a", "b", "b"], ["b", "a"]]
-    target = [["c"], ["c"]]
+    target = [["c", "</s>"], ["c", "</s>"]]
     m(source, target)
