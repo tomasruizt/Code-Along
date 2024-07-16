@@ -3,3 +3,6 @@ zh_en_data/
 *.model
 *.vocab
 runs/
+outputs/
+model.bin
+model.bin.optim
