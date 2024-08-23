@@ -30,12 +30,45 @@ def test_cholesky_3d():
 
 
 def test_cholesky_4d():
-    expected = np.array([[3.0, 1, 1, 0], [0, 2, 1, 1], [0, 0, 4, 1], [0, 0, 0, 5]])
-    assert np.linalg.det(expected) > 0
-    A = expected.T @ expected
+    expected, A = some_4d_matrix()
     R = np.zeros_like(A)
     cholesky(A, R)
     assert np.allclose(R, expected), R
+
+
+def some_4d_matrix():
+    expected = np.array([[3.0, 1, 1, 0], [0, 2, 1, 1], [0, 0, 4, 1], [0, 0, 0, 5]])
+    assert np.linalg.det(expected) > 0
+    A = expected.T @ expected
+    return expected, A
+
+
+def test_cholesky_outer_product():
+    expected, A = some_4d_matrix()
+    cholesky_op(A)
+    assert np.allclose(A, expected)
+
+
+@jit(nopython=True)
+def cholesky_op(A: np.ndarray):
+    """
+    Calculate the Cholesky decomposition RᵀR = A (in-place)
+    Where R is upper triangular (n x n)
+    In the outer product form
+    """
+    # set zeros to make sure we don't acces the lower triangle
+    n = A.shape[0]
+    for row_idx in range(1, n):  # skip first row
+        for col_idx in range(row_idx):
+            A[row_idx, col_idx] = 0
+
+    for it_idx in range(n):
+        A[it_idx, it_idx] = np.sqrt(A[it_idx, it_idx])
+        for col_idx in range(it_idx + 1, n):
+            A[it_idx, col_idx] /= A[it_idx, it_idx]
+        for row_idx in range(it_idx + 1, n):
+            for col_idx in range(row_idx, n):
+                A[row_idx, col_idx] -= A[it_idx, row_idx] * A[it_idx, col_idx]
 
 
 def test_failure():
@@ -55,6 +88,7 @@ def test_failure():
 def cholesky(A, R):
     """
     Implements the Cholesky decomposition of a positive definite matrix A
+    In inner product form
     Puts the result in R such that RᵀR = A
     """
     n = A.shape[0]
