@@ -37,16 +37,30 @@ def test_cholesky_4d():
 
 
 def some_4d_matrix():
-    expected = np.array([[3.0, 1, 1, 0], [0, 2, 1, 1], [0, 0, 4, 1], [0, 0, 0, 5]])
-    assert np.linalg.det(expected) > 0
-    A = expected.T @ expected
-    return expected, A
+    """RᵀR = A"""
+    R = np.array(
+        [
+            [3.0, 1, 1, 0],
+            [0, 2, 1, 1],
+            [0, 0, 4, 1],
+            [0, 0, 0, 5],
+        ]
+    )
+    assert np.linalg.det(R) > 0
+    A = R.T @ R
+    return R, A
 
 
 def test_cholesky_outer_product():
-    expected, A = some_4d_matrix()
+    R, A = some_4d_matrix()
     cholesky_op(A)
-    assert np.allclose(A, expected)
+    assert np.allclose(A, R)
+
+
+def test_cholesky_bordered_form():
+    R, A = some_4d_matrix()
+    cholesky_bordered(A)
+    assert np.allclose(A, R)
 
 
 def test_forward_substition():
@@ -91,6 +105,24 @@ def cholesky_op(A: np.ndarray):
                 A[row_idx, col_idx] -= A[it_idx, row_idx] * A[it_idx, col_idx]
 
 
+@jit(nopython=True)
+def cholesky_bordered(A: np.ndarray):
+    n = len(A)
+
+    for row_idx in range(1, n):  # skip first row
+        for col_idx in range(row_idx):
+            A[row_idx, col_idx] = 0
+
+    for j in range(n):
+        Ajm1 = A[:j, :j]
+        Rjm1 = Ajm1  # because we solve in-place
+        ajj = A[j, j]
+        c = A[:j, j]
+        forward_substitution(Rjm1.T, c)
+        h = c
+        A[j, j] = np.sqrt(ajj - (h**2).sum())
+
+
 def test_failure():
     singular_matrix = np.array([[0.0, 2.0], [1.0, 2.0]])
 
@@ -113,8 +145,8 @@ def cholesky(A, R):
     """
     n = A.shape[0]
     for i in range(n):
-        R[i, i] = np.sqrt(A[i, i] - R[:i, i] @ R[:i, i])
+        R[i, i] = np.sqrt(A[i, i] - (R[:i, i] ** 2).sum())
         if R[i, i] == 0:
             raise LinAlgError("Matrix is not positive definite")
         for j in range(i + 1, n):
-            R[i, j] = (A[i, j] - R[:i, i] @ R[:i, j]) / R[i, i]
+            R[i, j] = (A[i, j] - (R[:i, i] * R[:i, j]).sum()) / R[i, i]
