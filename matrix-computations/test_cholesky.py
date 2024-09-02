@@ -49,6 +49,26 @@ def test_cholesky_outer_product():
     assert np.allclose(A, expected)
 
 
+def test_forward_substition():
+    """Solve Ax = b, where A is lower triangular"""
+    A = np.array([[1.0, 0, 0], [2, 3, 0], [4, 5, 6]])
+    expected_x = np.array([7.0, 8.0, 9.0])
+    b = A @ expected_x
+    forward_substitution(A, b)
+    x = b
+    assert np.allclose(x, expected_x)
+
+
+@jit(nopython=True)
+def forward_substitution(A, b):
+    """Solves Ax = b, for lower triangular matrix A. Fills x in place of b."""
+    n = len(b)
+    for idx in range(n):
+        for prev in range(idx):
+            b[idx] -= A[idx, prev] * b[prev]
+        b[idx] /= A[idx, idx]
+
+
 @jit(nopython=True)
 def cholesky_op(A: np.ndarray):
     """
