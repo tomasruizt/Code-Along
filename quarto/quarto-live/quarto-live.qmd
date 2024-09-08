@@ -1,0 +1,21 @@
+---
+format: live-html
+engine: jupyter
+editor:
+    render-on-save: true
+---
+# Quarto + Python on WebAssembly
+$$ A x = b$$
+
+Below is some python code:
+```{pyodide}
+x = 2
+
+def square(x):
+    # your code goes here
+    ...
+```
+
+```{pyodide}
+assert square(5) == 25 
+```
