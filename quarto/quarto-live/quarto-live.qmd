@@ -3,19 +3,74 @@ format: live-html
 engine: jupyter
 editor:
     render-on-save: true
+# pyodide:
+#     packages:
+#         - plotly
+#         - nbformat
 ---
-# Quarto + Python on WebAssembly
-$$ A x = b$$
+# Title
 
-Below is some python code:
+Some simple inequalities can lead to very interesting results. Consider this simple example of squared difference:
+$$
+\begin{align}
+0 &\leq  (x - y)^2 \\
+\implies 0 &\leq x^2 -2xy +y^2 \\
+\implies 2xy &\leq x^2 + y^2 \\
+⟹ xy &≤ \frac{1}{2} x^2 + \frac{1}{2} y^2
+\end{align}
+$$
+
+The final line is a statement about any two numbers that is not obvious to me. It applies to *all* numbers $x$ and $y$. 
+
+## Vectors
+The inequality also applies to sums of numbers, and therefore to inner products. Consider this:
+
+$$
+\begin{align}
+x_1 y_1 + \dots x_n y_n &≤ \frac{1}{2} (x_1^2 + \dots + x_n^2) + \frac{1}{2} (y_1^2 + \dots + y_n^2) \\
+⟹ ⟨ x, y ⟩ &≤ \frac{1}{2} (⟨ x, x ⟩ + ⟨ y,y ⟩)
+\end{align}
+$$
+
+This inequality is saying that the vector product of *any* two vectors $x$ and $y$, is has an upper bound given by the average of both individual vector products of $x$ and $y$ with themselves. 
+
+I like to look at concrete numbers to convince myself. Try changing the values of $x$ and $y$ in the code below to see if the inequality holds.
 ```{pyodide}
-x = 2
+import numpy as np
+x = np.array([1, 2, 3])
+y = np.array([4, 5, 6])
 
-def square(x):
-    # your code goes here
-    ...
+print(x @ y)
+print(0.5 * (x @ x + y @ y))
 ```
 
+## Functions
+Not only does the inequality hold for finite-dimensional vectors, but it also holds for infinite-dimensional vectors, like functions. Recall that the inner product of two functions is defined as:
+$$⟨ f, g ⟩ = \int f(x) g(x) dx$$
+Using this definition, the inequality holds for functions as well:
+$$
+\begin{align}
+⟨ f, g ⟩ &= \int f(x) g(x) dx \\
+&≤ \frac{1}{2} \left( \int f(x)^2 dx + \int g(x)^2 dx \right)
+\end{align}
+$$
+
+Let's have a look again a this using concrete two concrete functions $f$ and $g$. Below we see that pointwise the inner product crosses the square of each individual function. Its not completely obvious that the average of both should be an upper bound to the inner product, but it is.
+
 ```{pyodide}
-assert square(5) == 25 
+import numpy as np
+import matplotlib.pyplot as plt
+
+x = np.linspace(0, 2, 100)
+f = x
+g = np.sin(4*x)
+
+plt.plot(x, f*g, label="$f \\cdot g$", color="orange")
+plt.plot(x, f*f, label="$f^2$", color="lightblue")
+plt.plot(x, g*g, label="$g^2$", color="lightblue")
+plt.plot(x, 0.5 * f*f + g*g, label="$0.5 (f^2 + g^2)$", color="blue")
+plt.title("Comparing inner product with individual functions")
+plt.legend()
+plt.grid()
+plt.show()
 ```
