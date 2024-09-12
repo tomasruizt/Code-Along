@@ -1,0 +1,4 @@
+- source: quarto-live.qmd
+  quarto-pub:
+    - id: d00d5362-541f-416b-9455-f986799832de
+      url: 'https://tomasruiz.quarto.pub/viz-inequalities-wasm'

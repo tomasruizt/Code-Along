@@ -1,0 +1,169 @@
+---
+format: live-html
+engine: jupyter
+editor:
+    render-on-save: true
+# pyodide:
+#     packages:
+#         - plotly
+#         - nbformat
+---
+# Grokking an Inner Product Inequality with Python on WebAssembly
+
+## Summary
+The purpose of this post is two-fold:
+
+1. To showcase Python running directly in your browser *without* any server behind it, like JavaScript. I will even import libraries like `numpy` and `matplotlib`. The underlying technologies that power this are [WebAssembly](https://en.wikipedia.org/wiki/WebAssembly) and [Pyodide](https://pyodide.org/), which I encourage you to check out.
+2. To get you excited about a simple inequality and its application to vectors, functions & matrices. These are our objects of study, and we will inspect and visualize them interactively using Python.
+
+I created this document using [Quarto Live](https://r-wasm.github.io/quarto-live/). Big thanks to [Renata Topinkova](https://renatatopinkova.github.io/) for showing me this tool!
+
+## The Inequality
+Michael Steele presents in his book this simple inequality based only on the fact that $(x-y)^2$ is always positive[^1]:
+
+[^1]: "The Cauchy-Schwarz Master Class: An Introduction to the Art of Mathematical Inequalities" by J. Michael Steele.
+
+$$
+\begin{align}
+0 &\leq  (x - y)^2 \\
+\implies 0 &\leq x^2 -2xy +y^2 \\
+⟹ xy &≤ \frac{1}{2} (x^2 + y^2)
+\end{align}
+$$
+
+The last inequality applies to *all* scalar numbers $x$ and $y$ was not immediately obvious to me. I'm the kind of person that likes numerical proof to internalize these results, and this is where Python comes in. Change the variables `x` and `y` in the code below to see if the inequality holds.
+
+```{pyodide}
+#| runbutton: false
+x = 3
+y = 4
+print(f"{x*y} ≤ {0.5 * (x*x + y*y)}")
+```
+
+::: {.callout-note}
+This Python code is running *in your browser* (!). There is no juypter notebook, nor any deployment or any client-server communication behind it! 🤯🚀
+:::
+
+## Generalizing to Vectors
+What happens when we apply this inequality to more than just scalars? It also applies to sequences of numbers, e.g:
+$$
+x_1 y_1 + x_2 y_2 <= \frac{1}{2} (x_1^2 + x_2^2) + \frac{1}{2} (y_1^2 + y_2^2)
+$$
+You might recognize that this is equivalent to an inner product:
+$$ x^T y ≤ \frac{1}{2} (x^T x + y^T y)$$
+where $x = [x_1, \dots, x_n]$ and $y = [y_1, \dots, y_n]$.
+
+The inequality is asserting that the vector product $x^Ty$ of *any* two vectors $x$ and $y$ has an upper bound given by the average of $x^Tx$ and $y^Ty$.
+
+Once again, I'm not intuitively convinced until I see code running. Notice how we import `numpy`, which calls compiled C routines under the hood (*but our runtime is the browser now*).
+
+```{pyodide}
+#| runbutton: false
+import numpy as np
+
+x = np.array([1, 2, 3])
+y = np.array([4, 5, 6])
+
+print(f"{x @ y} ≤ {0.5 * (x @ x + y @ y)}")
+```
+
+## Generalizing to Functions
+You might have heard that functions are infinite-dimensional vectors (🤯). In that case, the inequality also applies! But how does the inner product $x^Ty$ for two functions look like?
+
+The convention is to use the bracket notation $⟨ x, y ⟩$ rather than $x^Ty$. To sum over the infinite individual entries of the (function) vector, we use the integral:
+
+$$⟨ f, g ⟩ = \int f(x) g(x) dx$$
+Using this definition, the inequality holds for functions as well:
+$$
+\begin{align}
+⟨ f, g ⟩ &≤ \frac{1}{2} (⟨ f, f ⟩ + ⟨ g, g ⟩) \\
+&= \frac{1}{2} \left( \int f(x)^2 dx + \int g(x)^2 dx \right)
+\end{align}
+$$
+
+Let's take two concrete functions $f(x) = \cos(x)$ and $g(x) = \sin(4x)$. I choose these arbitrarily because plotting them looks nice. In the plot below, the individual functions $f^2$ and $g^2$ are plotted with light-blue lines. Their average is the red line, and the product $f ⋅ g$ is the green line. The red line is an upper bound for the green one. We see that the green line crosses over the two blue lines at different points but never crosses over the red line.
+
+::: {#lst-ref}
+
+```{pyodide}
+#| setup: true
+#| exercise: ex_funcs
+import matplotlib.pyplot as plt
+
+def plot(x, f, g):
+    plt.plot(x, f*g, label="$f \\cdot g$", color="green")
+    plt.plot(x, f*f, label="$f^2$", color="lightblue")
+    plt.plot(x, g*g, label="$g^2$", color="lightblue")
+    plt.plot(x, 0.5 * (f*f + g*g), label="$0.5 (f^2 + g^2)$", color="red")
+    plt.title("Upper bound for $\\langle f, g \\rangle$")
+    plt.legend()
+    plt.grid()
+    plt.show()
+```
+
+```{pyodide}
+#| exercise: ex_funcs
+#| autorun: true
+#| runbutton: false
+import numpy as np
+
+x = np.linspace(0, 2, 100)
+f = np.cos(x)
+g = np.sin(4*x)
+plot(x, f, g)
+```
+
+Comparing f⋅g with f⋅f and g⋅g
+
+:::
+
+::: {.callout-note}
+Feel free to use different functions `f` and `g` in the code
+:::
+
+Perhaps you noticed that I formulated the inequality on inner-products, but I'm plotting the functions pointwise. The missing step is the integral, which is evaluated using the `np.trapz()`. As we can confirm below, the inequality holds:
+
+```{pyodide}
+#| runbutton: false
+import numpy as np
+
+x = np.linspace(0, 2, 100)
+f = np.cos(x)
+g = np.sin(4*x)
+
+print(f"{np.trapz(f*g, x)} ≤ {0.5 * (np.trapz(f*f, x) + np.trapz(g*g, x))}")
+```
+
+## Generalizing to Matrices
+Will the inequality also apply to matrices? The inner product of two matrices $A$ and $B$ (also called [Frobenius inner product](https://en.wikipedia.org/wiki/Frobenius_inner_product)) is defined as:
+$$⟨A, B⟩ = \text{tr}(A^T B)$$
+where $\text{tr}$ is the trace operator. Note that this product is different from matrix multiplication $AB ≠ tr(A^T B) = ⟨A, B⟩$. The inequality for matrirces then reads:
+
+$$tr(A^T B) ≤ \frac{1}{2} (tr(A^T A) + tr(B^T B))$$
+
+It's easy to convince yourself that the inequality holds for matrices by writing down the trace as a sum of scalars, because the inequality holds for each scalar in the sum:
+
+$$
+\begin{align}
+tr(A^T B) 
+&= \sum_{i,j} A_{ij} B_{ij} & \text{(definition)}\\
+&≤ \frac{1}{2} \left( \sum_{i,j} A_{ij}^2 + \sum_{i,j} B_{ij}^2 \right) &\text{(applied by scalar)}\\
+&= \frac{1}{2} (tr(A^T A) + tr(B^T B))
+\end{align}
+$$
+
+Let's check the inequality with random matrices. You can use the `"Start Over"` button to re-run the code with new matrices.
+
+```{pyodide}
+#| runbutton: false
+import numpy as np
+
+A = np.random.randn(2, 2)
+B = np.random.randn(2, 2)
+
+def ip(X, Y):  # inner product
+  return np.trace(X.T @ Y)
+
+print(f"{ip(A, B)} ≤ {0.5 * (ip(A, A) + ip(B, B))}")
+```
+The inequality holds, but I have no geometric intuition about the trace of a matrix, or how this inequality could be visualized for matrices. If you have an idea, please let me know! 🙏
