@@ -8,7 +8,7 @@ editor:
 #         - plotly
 #         - nbformat
 ---
-# Title
+# Visualizing Inequalities using Python on WebAssembly
 
 Some simple inequalities can lead to very interesting results. Consider this simple example of squared difference:
 $$
