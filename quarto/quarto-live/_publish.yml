@@ -2,3 +2,7 @@
   quarto-pub:
     - id: d00d5362-541f-416b-9455-f986799832de
       url: 'https://tomasruiz.quarto.pub/viz-inequalities-wasm'
+- source: viz-inequalities-inner-prod-wasm.qmd
+  quarto-pub:
+    - id: 6979b389-c62e-4a0c-9694-6ea38a9413e3
+      url: 'https://tomasruiz.quarto.pub/viz-inequalities-inner-prod-wasm'

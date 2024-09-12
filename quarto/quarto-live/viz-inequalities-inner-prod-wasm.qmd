@@ -37,7 +37,7 @@ $$
 \end{align}
 $$
 
-The last inequality applies to *all* scalar numbers $x$ and $y$ was not immediately obvious to me. I'm the kind of person that likes numerical proof to internalize these results, and this is where Python comes in. Change the variables `x` and `y` in the code below to see if the inequality holds.
+The last inequality above is not intuitively obvious to me. I'm the kind of person that likes numerical proof to internalize these results, and this is where Python comes in handy. Change the variables `x` and `y` in the code below to see if the inequality holds.
 
 ```{pyodide}
 #| runbutton: false
@@ -87,9 +87,7 @@ $$
 \end{align}
 $$
 
-Let's take two concrete functions $f(x) = \cos(x)$ and $g(x) = \sin(4x)$. I choose these arbitrarily because plotting them looks nice. In the plot below, the individual functions $f^2$ and $g^2$ are plotted with light-blue lines. Their average is the red line, and the product $f ⋅ g$ is the green line. The red line is an upper bound for the green one. We see that the green line crosses over the two blue lines at different points but never crosses over the red line.
-
-::: {#lst-ref}
+Let's take two concrete functions $f(x) = \cos(x)$ and $g(x) = \sin(4x)$. I choose these arbitrarily because plotting them looks nice. Feel free to use different functions `f` and `g` in the code.
 
 ```{pyodide}
 #| setup: true
@@ -119,15 +117,9 @@ g = np.sin(4*x)
 plot(x, f, g)
 ```
 
-Comparing f⋅g with f⋅f and g⋅g
+In the plot above, the individual functions $f^2$ and $g^2$ are plotted with light-blue lines. Their average is the red line, and the product $f ⋅ g$ is the green line. The red line is an upper bound for the green one. We see that the green line crosses over the two blue lines at different points but never crosses over the red line.
 
-:::
-
-::: {.callout-note}
-Feel free to use different functions `f` and `g` in the code
-:::
-
-Perhaps you noticed that I formulated the inequality on inner-products, but I'm plotting the functions pointwise. The missing step is the integral, which is evaluated using the `np.trapz()`. As we can confirm below, the inequality holds:
+**About the integral:** Perhaps you noticed that I formulated the inequality on inner-products, but I'm plotting the functions pointwise. The missing step is the integral, which is evaluated in Python using the numpy function `np.trapz()`. As we can confirm below, the inequality holds:
 
 ```{pyodide}
 #| runbutton: false
@@ -143,11 +135,17 @@ print(f"{np.trapz(f*g, x)} ≤ {0.5 * (np.trapz(f*f, x) + np.trapz(g*g, x))}")
 ## Generalizing to Matrices
 Will the inequality also apply to matrices? The inner product of two matrices $A$ and $B$ (also called [Frobenius inner product](https://en.wikipedia.org/wiki/Frobenius_inner_product)) is defined as:
 $$⟨A, B⟩ = \text{tr}(A^T B)$$
-where $\text{tr}$ is the trace operator. Note that this product is different from matrix multiplication $AB ≠ tr(A^T B) = ⟨A, B⟩$. The inequality for matrirces then reads:
+where $\text{tr}$ is the trace operator.
+
+::: {.callout-warning} 
+Beware that this inner product is different from matrix multiplication $$⟨A, B⟩ = tr(A^T B) ≠ AB$$ 
+:::
+ 
+The inequality for matrices then reads:
 
 $$tr(A^T B) ≤ \frac{1}{2} (tr(A^T A) + tr(B^T B))$$
 
-It's easy to convince yourself that the inequality holds for matrices by writing down the trace as a sum of scalars, because the inequality holds for each scalar in the sum:
+It's easy to convince yourself that the inequality holds for matrices by writing down the trace as a sum of scalars. As we verified before, inequality holds for each scalar in the sum:
 
 $$
 \begin{align}
@@ -164,8 +162,9 @@ Let's check the inequality with random matrices. You can use the `"Start Over"` 
 #| runbutton: false
 import numpy as np
 
-A = np.random.randn(2, 2)
-B = np.random.randn(2, 2)
+dim = 2
+A = np.random.randn(dim, dim)
+B = np.random.randn(dim, dim)
 
 def ip(X, Y):  # inner product
   return np.trace(X.T @ Y)
@@ -175,4 +174,4 @@ print(f"{ip(A, B)} ≤ {0.5 * (ip(A, A) + ip(B, B))}")
 The inequality holds, but I have no geometric intuition about the trace of a matrix, or how this inequality could be visualized for matrices. If you have an idea, please let me know! 🙏
 
 ## Further Sources
-If you found the mathematics interesting, particularly the generalization of inner products, I recommend MIT's course [Matrix Calculus for Machine Learning and Beyond](https://ocw.mit.edu/courses/18-s096-matrix-calculus-for-machine-learning-and-beyond-january-iap-2023/), which covers this topic in more details, and goes much further 😄.
+If you found the mathematics interesting, particularly the generalization of inner products, I recommend MIT's course [Matrix Calculus for Machine Learning and Beyond](https://ocw.mit.edu/courses/18-s096-matrix-calculus-for-machine-learning-and-beyond-january-iap-2023/), which covers this topic in more detail, and goes *much* further 😄.
