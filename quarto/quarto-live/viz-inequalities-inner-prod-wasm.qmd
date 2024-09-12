@@ -3,12 +3,18 @@ format: live-html
 engine: jupyter
 editor:
     render-on-save: true
+date: 2024-09-12
+author:
+  - name: Tomas Ruiz
+    email: t.ruiz@lmu.de
+    affiliations: Ludwig-Maximilians-Universität München
+    
 # pyodide:
 #     packages:
 #         - plotly
 #         - nbformat
 ---
-# Grokking an Inner Product Inequality with Python on WebAssembly
+# Grokking an Inner Product Inequality With Python on WebAssembly
 
 ## Summary
 The purpose of this post is two-fold:
@@ -41,7 +47,7 @@ print(f"{x*y} ≤ {0.5 * (x*x + y*y)}")
 ```
 
 ::: {.callout-note}
-This Python code is running *in your browser* (!). There is no juypter notebook, nor any deployment or any client-server communication behind it! 🤯🚀
+This Python code is running *in your browser*. There is no juypter notebook, nor any deployment or any client-server communication behind it! 🤯🚀
 :::
 
 ## Generalizing to Vectors
@@ -167,3 +173,6 @@ def ip(X, Y):  # inner product
 print(f"{ip(A, B)} ≤ {0.5 * (ip(A, A) + ip(B, B))}")
 ```
 The inequality holds, but I have no geometric intuition about the trace of a matrix, or how this inequality could be visualized for matrices. If you have an idea, please let me know! 🙏
+
+## Further Sources
+If you found the mathematics interesting, particularly the generalization of inner products, I recommend MIT's course [Matrix Calculus for Machine Learning and Beyond](https://ocw.mit.edu/courses/18-s096-matrix-calculus-for-machine-learning-and-beyond-january-iap-2023/), which covers this topic in more details, and goes much further 😄.
