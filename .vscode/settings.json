@@ -3,5 +3,10 @@
         "."
     ],
     "python.testing.unittestEnabled": false,
-    "python.testing.pytestEnabled": true
+    "python.testing.pytestEnabled": true,
+    "files.associations": {
+        "random": "cpp",
+        "queue": "cpp",
+        "stack": "cpp"
+    }
 }

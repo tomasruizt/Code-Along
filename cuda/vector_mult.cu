@@ -6,7 +6,6 @@ int main() {
     int a[] = {1, 2, 3, 4, 5};
     int b[] = {1, 2, 3, 4, 5};
     int c[n];
-    mult(a, b, c, n);
 
     // Device pointers
     int *a_d, *b_d, *c_d;
@@ -19,6 +18,10 @@ int main() {
     // Copy data from host to device
     cudaMemcpy(a_d, a, n * sizeof(int), cudaMemcpyHostToDevice);
     cudaMemcpy(b_d, b, n * sizeof(int), cudaMemcpyHostToDevice);
+    
+    int gridSize = (n + 31) / 32;
+    plus<<<gridSize, 32>>>(a_d, b_d, c_d, n);
+    cudaMemcpy(c, c_d, n * sizeof(int), cudaMemcpyDeviceToHost);
 
     printf("a = ");
     print_vector(a, n);
@@ -28,7 +31,6 @@ int main() {
 
     printf("c = ");
     print_vector(c, n);
-    printf("\n");
 
     // Free device memory
     cudaFree(a_d);
