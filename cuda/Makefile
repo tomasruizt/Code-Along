@@ -1,2 +1,2 @@
 vector_mult:
-	nvcc -g -o program vector_mult.cu operations.c && ./program
+	nvcc -g -o program vector_mult.cu operations.cu && ./program
