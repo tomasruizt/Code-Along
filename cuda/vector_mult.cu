@@ -9,16 +9,16 @@ int main() {
     mult(a, b, c, n);
 
     // Device pointers
-    int *d_a, *d_b, *d_c;
+    int *a_d, *b_d, *c_d;
 
     // Allocate memory on the device
-    cudaMalloc((void**)&d_a, n * sizeof(int));
-    cudaMalloc((void**)&d_b, n * sizeof(int));
-    cudaMalloc((void**)&d_c, n * sizeof(int));
+    cudaMalloc((void**)&a_d, n * sizeof(int));
+    cudaMalloc((void**)&b_d, n * sizeof(int));
+    cudaMalloc((void**)&c_d, n * sizeof(int));
 
     // Copy data from host to device
-    cudaMemcpy(d_a, a, n * sizeof(int), cudaMemcpyHostToDevice);
-    cudaMemcpy(d_b, b, n * sizeof(int), cudaMemcpyHostToDevice);
+    cudaMemcpy(a_d, a, n * sizeof(int), cudaMemcpyHostToDevice);
+    cudaMemcpy(b_d, b, n * sizeof(int), cudaMemcpyHostToDevice);
 
     printf("a = ");
     print_vector(a, n);
@@ -31,9 +31,9 @@ int main() {
     printf("\n");
 
     // Free device memory
-    cudaFree(d_a);
-    cudaFree(d_b);
-    cudaFree(d_c);
+    cudaFree(a_d);
+    cudaFree(b_d);
+    cudaFree(c_d);
 
     return 0;
 }
