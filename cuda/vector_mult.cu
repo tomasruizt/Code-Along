@@ -1,5 +1,4 @@
 #include <stdio.h>
-#include <cuda.h>
 #include "operations.h"
 
 int main() {
@@ -30,5 +29,11 @@ int main() {
     printf("c = ");
     print_vector(c, n);
     printf("\n");
+
+    // Free device memory
+    cudaFree(d_a);
+    cudaFree(d_b);
+    cudaFree(d_c);
+
     return 0;
 }
