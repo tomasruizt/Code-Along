@@ -1,2 +1,2 @@
 run:
-	nvcc -g -o program main.cu && ./program
+	nvcc -g -o program main.cu grayscale.cu && ./program
