@@ -45,7 +45,7 @@ int main() {
         return 1;
     }
 
-    printf("Image successfully written to my-image.jpg\n");
+    printf("Image successfully written to grayscale.jpg\n");
 
     // Free the image memory after use, and CUDA memory
     stbi_image_free(img);
