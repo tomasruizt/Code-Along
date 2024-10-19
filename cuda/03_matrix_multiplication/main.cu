@@ -1,3 +1,4 @@
+#define ARMA_ALLOW_FAKE_GCC
 #include <stdio.h>
 #include <armadillo>
 
@@ -22,5 +23,9 @@ int main() {
     arma::mat B(n, p, arma::fill::randu);  // 1000x1000 random matrix
     arma::mat C = A * B;  // Matrix multiplication
     print_matrix(m, p, C.memptr());
+
+    int *a_d;
+    cudaMalloc((void**)&a_d, n * sizeof(int));
+    cudaFree(a_d);
     return 0;
 }

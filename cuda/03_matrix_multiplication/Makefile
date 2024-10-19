@@ -1,2 +1,2 @@
 run:
-	g++ -g -o program main.c -larmadillo && ./program
+	nvcc -g -o program main.cu -larmadillo && ./program
