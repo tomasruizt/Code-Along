@@ -8,6 +8,7 @@
         "random": "cpp",
         "queue": "cpp",
         "stack": "cpp",
-        "__config": "cpp"
+        "__config": "cpp",
+        "armadillo": "cpp"
     }
 }
