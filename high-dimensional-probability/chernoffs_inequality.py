@@ -18,7 +18,7 @@ def __():
 @app.cell
 def __(mo):
     n_input = mo.ui.number(1, 10_000)
-    p = mo.ui.slider(0.0, 1.0, step=0.01)
+    p = mo.ui.slider(0.01, 0.99, step=0.01)
     return n_input, p
 
 
@@ -49,52 +49,18 @@ def __(mo):
         # Chernoffs Bound
         The binomal distribution represents the sum of many many random variables, each of which has a bernoulli distribution.
 
-        The Chernoff's inequality is useful to bound the tail of a distribution (like the binomial). It tells us that the probability that a random variable deviates $X$ deviates from its mean $\mu = \text{E}[X]$ by a delta $a$ is bounded exponetially. The bound is proportionally stronger with the number of elements drawn $n$, and inversely proportional to the delta $a$.
+        The Chernoff's inequality is useful to bound the tail of a distribution (like the binomial). It tells us that the probability that a random variable $X$ deviates from its mean $\mu = \mathbb{E}[X]$ by a delta $\delta$ is bounded exponetially. The Chernoff Bound comes in many forms, and a specific one exists for random variables with binomial distributions.
 
-        $$\text{Pr}[X \geq \mu + a] \leq e^{-\frac{a^2}{2n}}$$
+        The upper tail bound is: 
+        $$\mathbb{P}[X \geq (1+\delta) \mu] \leq \exp(\frac{- \delta^2 \mu}{3})$$
 
-        The Chernoff's inequality can be constructed for both sides by changing $\mu + a$ with $\mu - a$
+        While the lower tail bound is:
+        $$\mathbb{P}[X \leq (1-\delta) \mu] \leq \exp(\frac{- \delta^2 \mu}{2})$$
+
+        The variable $\delta$ must be within [0, 1]. These formulas are taken from [this url](https://courses.cs.washington.edu/courses/cse312/20su/files/student_drive/6.2.pdf).
         """
     )
     return
-
-
-@app.cell
-def __(mo, n_input):
-
-    mo.md(rf"""
-    For our binomial example above we want to construct a 95% confidence interval for $\mu$ around $X$. As a result $a$ will be determined from the right-hand side of the inequality.
-
-    * n={n_input.value}
-    * $e^{{-a^2 / 2n}} = 0.05 / 2$
-
-    """)
-    return
-
-
-@app.cell
-def __(mo):
-    mo.md(
-        r"""
-        To find $a$:
-
-        $$
-        \begin{align}
-        - a^2 / 2n &= \log{{0.025}} \\
-        \implies -a^2 &= 2n \log 0.025 \\
-        \implies a &= \sqrt{ -2 n \log 0.025}
-        \end{align}
-        $$
-        """
-    )
-    return
-
-
-@app.cell
-def __(n_input, np):
-    a = np.sqrt(-2 * n_input.value * np.log(0.025))
-    a
-    return (a,)
 
 
 @app.cell
@@ -104,15 +70,43 @@ def __(mo, n_input):
 
 
 @app.cell
-def __(draw_input, mo):
-    draw = draw_input.value
-    mo.md(f"Draw = {draw_input} {draw_input.value}")
-    return (draw,)
+def __(mo):
+    mo.md(
+        """
+        In this example we are controlling the sucessful draws from the binomial distribution. We can find out $\delta$ by the equation:
+
+        $$\\text{draws} = (1+\delta)\mu$$
+
+        $$\implies \\frac{\\text{draws}}{\mu} - 1 = \delta$$
+        """
+    )
+    return
 
 
 @app.cell
-def __(a, draw, mo):
-    mo.md(f"Chernoff's bound suggest that $\mu$ is {draw} $\pm$ {a:.3f} with 95% confidence")
+def __(draw_input, mo, mu):
+    draw = draw_input.value
+    delta = (draw / mu) - 1
+    mo.md(f"""
+    Draws = {draw_input} {draw_input.value}
+
+    $\delta = {delta:.3f}$
+    """)
+    return delta, draw
+
+
+@app.cell
+def __(delta, draw, mo, mu, np):
+    _prob = np.exp(- delta**2 * mu / 3)
+    mo.md(f"""
+    * mu = {mu:.3f}
+    * $\delta$ = {delta:.3f}
+    * X = {draw}
+
+    The probability that $X \geq (1 + \delta) \mu$ = {(1 + delta) * mu:.3f} is **less** than {_prob:.3f}.
+
+    * **Note:** Probabilities close to 1 tell almost nothing (non-informative), because all these probabilities are bounded by 1. The probability is interesting when its small, because it bounds the probability mass above the threshold (in the case of the upper tail bound).
+    """)
     return
 
 
@@ -121,40 +115,59 @@ def __(mo):
     mo.md(
         r"""
         ## Visualizing The Chernoff Confidence
-        We might be interested in the probability that $\mu$ is within a deviation of size $a$ from $X$ and how that depends on the size of $a$. Let's visualize that:
+        We are interested in how quickly the bound decays in the tails of the distribution. Let's visualize that.
         """
     )
     return
 
 
 @app.cell
-def __(n_input, np):
-    a_range = np.linspace(0.01, n_input.value)
-    rhs = np.exp(- a_range**2 / (2 * n_input.value))
-    return a_range, rhs
+def __(mu, n_input, np):
+    up_side = np.linspace(np.ceil(mu), n_input.value + 1, min(100, n_input.value)).round()
+    deltas = (up_side/mu) - 1
+    rhs = np.exp(- deltas**2 * mu / 3)
+    return deltas, rhs, up_side
 
 
 @app.cell
-def __(a_range, draw, ks, mu, ps, rhs):
-    import matplotlib.pyplot as plt
+def __(alt, ks, mo, n_input, p, pd, rhs, scipy, up_side):
+    # data.assign(name="binom")
+    _df = pd.concat(
+        [
+            pd.DataFrame({"name": "chernoff_upper_bound", "x": up_side, "prob": rhs}),
+            pd.DataFrame({"name": "binom_sf", "x": ks, "prob": scipy.stats.binom.sf(k=ks, n=n_input.value, p=p.value)})
+        ], ignore_index=True
+    )
 
-    xs = [*(draw + a_range), *(draw - a_range)]
-    ys = [*rhs, *rhs]
-    plt.scatter(xs, ys)
-    plt.vlines(mu, 0, 1, color="red", label="mu")
-    plt.vlines(draw, 0, 1, color="blue", label="draw")
-    plt.bar(ks, ps, label="prob[X=x]")
-    plt.legend()
-    plt.xlim(min(ks) - 1, max(ks) + 1)
-    plt.gca()
-    return plt, xs, ys
+    _chart = alt.Chart(_df).mark_line().encode(
+        x=alt.X('x:O',  # Use ordinal scale to ensure bars touch
+                axis=alt.Axis(labelAngle=0)),  # Ensure labels stay horizontal
+        y='prob',
+        color="name"
+    )
+
+    mo.ui.altair_chart(_chart)
+    return
 
 
 @app.cell
 def __(mo, n_input, p):
     mu = n_input.value * p.value
-    mo.md(f"Number of draws: {n_input}  \n probability {p} {p.value}.  \n average $\mu$ = {mu}")
+    mo.md(f"Number of draws: {n_input}  \n probability {p} {p.value}.  \n average $\mu$ = {mu:.3f}")
     return (mu,)
+
+
+@app.cell(disabled=True, hide_code=True)
+def __(ks, mu, ps, rhs, up_side):
+    import matplotlib.pyplot as plt
+
+    plt.scatter(up_side, rhs, label="chernoff upper bound")
+    plt.vlines(mu, 0, 1, color="red", label="mu")
+    plt.bar(ks, ps, label="prob[X=x]")
+    plt.legend()
+    plt.xlim(min(ks) - 1, max(ks) + 1)
+    plt.gca()
+    return (plt,)
 
 
 if __name__ == "__main__":
