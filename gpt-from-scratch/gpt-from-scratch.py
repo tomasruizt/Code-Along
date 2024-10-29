@@ -5,14 +5,15 @@ from torch.nn import functional as F
 
 
 device = "cuda"
-batch_size = 32
-learning_rate = 1e-3
+block_size = 256
+batch_size = 64
+learning_rate = 3e-4
 learning_iters = 3000
 eval_iters = 200
-n_embed = 32
-n_heads = 4
-n_blocks = 4
-dropout = 0.5
+n_embed = 384
+n_heads = 6
+n_blocks = 6
+dropout = 0.2
 assert n_embed % n_heads == 0
 torch.manual_seed(1337)
 
@@ -45,8 +46,7 @@ n = int(0.9 * len(full_data))
 train_data, val_data = full_data[:n], full_data[n:]
 assert len(train_data) + len(val_data) == len(full_data)
 
-# EXAMPLE ABOUT CONTEXT AND TARGET
-block_size = 8
+# EXAMPLE ABOUT CONTEXT AND TARGE
 x = train_data[:block_size]
 y = train_data[1 : block_size + 1]
 for t in range(block_size):
