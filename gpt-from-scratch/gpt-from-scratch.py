@@ -10,6 +10,10 @@ learning_rate = 1e-3
 learning_iters = 3000
 eval_iters = 200
 n_embed = 32
+n_heads = 4
+n_blocks = 4
+dropout = 0.5
+assert n_embed % n_heads == 0
 torch.manual_seed(1337)
 
 text: str = (Path(__file__).parent / "tiny-shakespeare.txt").read_text()
@@ -93,8 +97,11 @@ class BigramLM(nn.Module):
         super().__init__()
         self.token_embedding_tbl = nn.Embedding(vocab_size, n_embed)
         self.pos_embedding_tbl = nn.Embedding(block_size, n_embed)
+        self.blocks = nn.Sequential(
+            *[Block() for _ in range(n_blocks)],
+            nn.LayerNorm(n_embed),
+        )
         self.lm_head = nn.Linear(n_embed, vocab_size)
-        self.sa_head = MultiHeadAttn(n_heads=4, head_size=n_embed // 4)
 
     def forward(self, x, targets):
         logits = self.logits(x)  # (B,T,V) where V=vocab_size
@@ -109,7 +116,7 @@ class BigramLM(nn.Module):
         token_embed = self.token_embedding_tbl(x)  # (B,T,E)
         pos_embed = self.pos_embedding_tbl(torch.arange(T, device=device))  # (T,E)
         out = token_embed + pos_embed
-        out = self.sa_head(out)
+        out = self.blocks(out)
         logits = self.lm_head(out)  # (B,T,V)
         return logits
 
@@ -140,6 +147,7 @@ class Head(nn.Module):
 
         tril = torch.triu(torch.ones(block_size, block_size), 1)
         self.register_buffer("tril", tril)
+        self.dropout = nn.Dropout(dropout)
 
     def forward(self, x):
         B, T, C = x.shape
@@ -150,17 +158,51 @@ class Head(nn.Module):
         wei = torch.einsum("bth, bTh -> btT", q, k) * normalization  # (B,T,T)
         wei = wei.masked_fill(self.tril[:T, :T].bool(), float("-inf"))
         wei = F.softmax(wei, dim=2)
+        wei = self.dropout(wei)
         out = wei @ v
         return out
+
+
+class FeedForward(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.ff = nn.Sequential(
+            nn.Linear(n_embed, 4 * n_embed),
+            nn.ReLU(),
+            nn.Linear(4 * n_embed, n_embed),
+            nn.Dropout(dropout),
+        )
+
+    def forward(self, x):
+        return self.ff(x)
 
 
 class MultiHeadAttn(nn.Module):
     def __init__(self, n_heads: int, head_size: int):
         super().__init__()
         self.heads = nn.ModuleList([Head(head_size) for _ in range(n_heads)])
+        self.proj = nn.Linear(n_heads * head_size, n_embed)
+        self.dropout = nn.Dropout(dropout)
 
     def forward(self, x):
-        return torch.cat([head(x) for head in self.heads], dim=-1)
+        out = torch.cat([head(x) for head in self.heads], dim=-1)
+        out = self.proj(out)
+        out = self.dropout(out)
+        return out
+
+
+class Block(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.sa_head = MultiHeadAttn(n_heads=n_heads, head_size=n_embed // n_heads)
+        self.ff = FeedForward()
+        self.ln1 = nn.LayerNorm(n_embed)
+        self.ln2 = nn.LayerNorm(n_embed)
+
+    def forward(self, x):
+        x = x + self.sa_head(self.ln1(x))
+        x = x + self.ff(self.ln2(x))
+        return x
 
 
 xb, yb = get_batch(train_data)
