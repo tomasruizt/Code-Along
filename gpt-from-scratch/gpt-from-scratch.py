@@ -5,10 +5,12 @@ from torch.nn import functional as F
 
 
 device = "cuda"
-batch_size = 4
-learning_rate = 0.001
-eval_iters = 100
+batch_size = 32
+learning_rate = 1e-3
+learning_iters = 3000
+eval_iters = 200
 n_embed = 32
+torch.manual_seed(1337)
 
 text: str = (Path(__file__).parent / "tiny-shakespeare.txt").read_text()
 chars = sorted(list(set(text)))
@@ -18,12 +20,20 @@ char_to_int = {ch: i for i, ch in enumerate(chars)}
 int_to_char = {i: ch for i, ch in enumerate(chars)}
 
 
-def encode_string(string: str) -> torch.Tensor:
+def encode_string(string: str) -> list[int]:
     return [char_to_int[ch] for ch in string]
 
 
 def decode_ints(ints: list[int]) -> str:
     return "".join(int_to_char[i] for i in ints)
+
+
+def decode_batch(x: torch.Tensor) -> list[str]:
+    return [decode_ints(example) for example in x.tolist()]
+
+
+def seed_token_for_generation() -> torch.Tensor:
+    return torch.tensor(encode_string("\n"), device=device).long().reshape(1, 1)
 
 
 full_data = torch.LongTensor(encode_string(text)).to(device)
@@ -39,8 +49,6 @@ for t in range(block_size):
     ctx = x[: t + 1]
     tgt = y[t]
 # END EXAMPLE
-
-torch.manual_seed(42)
 
 
 def get_batch(data):
@@ -67,7 +75,7 @@ def estimate_loss(model):
 
 def train(model):
     optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate)
-    for steps in range(5000):
+    for steps in range(learning_iters):
         xb, yb = get_batch(train_data)
         optimizer.zero_grad()
         _, loss = model(xb, yb)
@@ -86,6 +94,7 @@ class BigramLM(nn.Module):
         self.token_embedding_tbl = nn.Embedding(vocab_size, n_embed)
         self.pos_embedding_tbl = nn.Embedding(block_size, n_embed)
         self.lm_head = nn.Linear(n_embed, vocab_size)
+        self.sa_head = MultiHeadAttn(n_heads=4, head_size=n_embed // 4)
 
     def forward(self, x, targets):
         logits = self.logits(x)  # (B,T,V) where V=vocab_size
@@ -99,13 +108,16 @@ class BigramLM(nn.Module):
         B, T = x.shape
         token_embed = self.token_embedding_tbl(x)  # (B,T,E)
         pos_embed = self.pos_embedding_tbl(torch.arange(T, device=device))  # (T,E)
-        logits = self.lm_head(token_embed + pos_embed)  # (B,T,V)
+        out = token_embed + pos_embed
+        out = self.sa_head(out)
+        logits = self.lm_head(out)  # (B,T,V)
         return logits
 
     def generate(self, x, max_new_tokens: int) -> torch.Tensor:
         # x: (B,T)
         for _ in range(max_new_tokens):
-            idx_next = self._generate_step(x)
+            x_truncated = x[:, -block_size:]  # (B,T)
+            idx_next = self._generate_step(x_truncated)
             x = torch.cat([x, idx_next], dim=1)  # (B,T+1)
         return x
 
@@ -118,25 +130,59 @@ class BigramLM(nn.Module):
         return idx_next
 
 
+class Head(nn.Module):
+    def __init__(self, head_size: int):
+        super().__init__()
+        self.key = nn.Linear(n_embed, head_size, bias=False)
+        self.query = nn.Linear(n_embed, head_size, bias=False)
+        self.value = nn.Linear(n_embed, head_size, bias=False)
+        self.head_size = head_size
+
+        tril = torch.triu(torch.ones(block_size, block_size), 1)
+        self.register_buffer("tril", tril)
+
+    def forward(self, x):
+        B, T, C = x.shape
+        k = self.key(x)  # (B,T,H)
+        q = self.query(x)  # (B,T,H)
+        v = self.value(x)  # (B,T,H)
+        normalization = self.head_size**-0.5
+        wei = torch.einsum("bth, bTh -> btT", q, k) * normalization  # (B,T,T)
+        wei = wei.masked_fill(self.tril[:T, :T].bool(), float("-inf"))
+        wei = F.softmax(wei, dim=2)
+        out = wei @ v
+        return out
+
+
+class MultiHeadAttn(nn.Module):
+    def __init__(self, n_heads: int, head_size: int):
+        super().__init__()
+        self.heads = nn.ModuleList([Head(head_size) for _ in range(n_heads)])
+
+    def forward(self, x):
+        return torch.cat([head(x) for head in self.heads], dim=-1)
+
+
 xb, yb = get_batch(train_data)
 m = BigramLM()
 m.to(device)
 logits, loss = m(xb, yb)
 
+train(m)
 
-B, T, C = 4, 8, 32
-x = torch.randn(B, T, C, device=device)
 
-head_size = 16
-key = nn.Linear(C, head_size, bias=False, device=device)
-query = nn.Linear(C, head_size, bias=False, device=device)
-value = nn.Linear(C, head_size, bias=False, device=device)
-k = key(x)  # (B,T,H)
-q = query(x)  # (B,T,H)
-v = value(x)  # (B,T,H)
-wei = torch.einsum("bth, bTh -> btT", q, k)  # (B,T,T)
-tril = torch.triu(torch.ones(T, T, device=device), 1).bool()
-wei = wei.masked_fill(tril, float("-inf"))
-wei = F.softmax(wei, dim=2)
-out = wei @ v
-print(out.shape)
+x = seed_token_for_generation()
+outs = m.generate(x=x, max_new_tokens=100)
+gen_text = decode_ints(outs[0].cpu().tolist())
+print(gen_text)
+
+
+# B, T, C = 4, 8, 32
+# x = torch.randn(B, T, C, device=device)
+
+# head_size = 16
+
+
+# print(q.var())
+# print(k.var())
+# print(wei.var())
