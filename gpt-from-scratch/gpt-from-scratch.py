@@ -124,9 +124,19 @@ m.to(device)
 logits, loss = m(xb, yb)
 
 
-# TRAIN
-# train(model=m)
-x_ = torch.randn(4, 8, 2)  # (B,T,V)
-wei = torch.tril(torch.ones(8, 8))  # (T,T)
-wei = wei / wei.sum(dim=1, keepdim=True)  # (B,T,V)
-print((wei @ x_).shape)
+B, T, C = 4, 8, 32
+x = torch.randn(B, T, C, device=device)
+
+head_size = 16
+key = nn.Linear(C, head_size, bias=False, device=device)
+query = nn.Linear(C, head_size, bias=False, device=device)
+value = nn.Linear(C, head_size, bias=False, device=device)
+k = key(x)  # (B,T,H)
+q = query(x)  # (B,T,H)
+v = value(x)  # (B,T,H)
+wei = torch.einsum("bth, bTh -> btT", q, k)  # (B,T,T)
+tril = torch.triu(torch.ones(T, T, device=device), 1).bool()
+wei = wei.masked_fill(tril, float("-inf"))
+wei = F.softmax(wei, dim=2)
+out = wei @ v
+print(out.shape)
