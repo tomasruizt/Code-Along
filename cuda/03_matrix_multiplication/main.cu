@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <armadillo>
 #include <cmath>
+#include <chrono>
 
 __host__ __device__ int idx(int i, int j, int rowSize) {
     return i * rowSize + j;
@@ -109,61 +110,118 @@ bool compare_matrices(double *A, double *B, int m, int n, double tolerance) {
 }
 
 int main() {
-    int m = 2;
-    int n = 2;
-    int p = 2;
-    // Attention! Armadillo stores matrices in column-major order
-    arma::mat A(m, n, arma::fill::randu);
-    arma::mat B = {{1, 2}, {3, 4}}; //(n, p, arma::fill::randu);
-
-    A.print("Matrix A:");
-    printf("\n");
-
-    B.print("Matrix B:");
-    printf("\n");
+    const int NUM_RUNS = 5;  // Number of times to run each method
+    int m = 1024;
+    int n = 1024;
+    int p = 1024;
     
-    // Armadillo multiplication
-    arma::mat C_arma = A * B;
-    C_arma.print("Armadillo result C:");
-    printf("\n");
+    printf("Matrix dimensions: %dx%d * %dx%d = %dx%d\n", m, n, n, p, m, p);
+    printf("Running each method %d times...\n\n", NUM_RUNS);
+    
+    // Timing variables
+    cudaEvent_t start, stop;
+    cudaEventCreate(&start);
+    cudaEventCreate(&stop);
+    float gpu_milliseconds = 0;
+    
+    // Initialize matrices
+    arma::mat A(m, n, arma::fill::randu);
+    arma::mat B(n, p, arma::fill::randu);
 
-    // CPU multiplication
+    // Armadillo multiplication timing
+    double arma_total = 0;
+    arma::mat C_arma(m, p);
+    for (int run = 0; run < NUM_RUNS; run++) {
+        auto cpu_start = std::chrono::high_resolution_clock::now();
+        C_arma = A * B;
+        auto cpu_end = std::chrono::high_resolution_clock::now();
+        auto duration = std::chrono::duration_cast<std::chrono::microseconds>(cpu_end - cpu_start);
+        arma_total += duration.count() / 1000.0;
+    }
+    printf("Armadillo average time: %.3f ms\n\n", arma_total / NUM_RUNS);
+
+    // CPU multiplication timing
+    double cpu_total = 0;
     arma::mat C_cpu(m, p);
-    cpu_matrix_mult(A.memptr(), B.memptr(), C_cpu.memptr(), m, n, p);
-    printf("CPU result:\n");
-    print_matrix(m, p, C_cpu.memptr(), false);
-    printf("\n");
+    for (int run = 0; run < NUM_RUNS; run++) {
+        auto cpu_start = std::chrono::high_resolution_clock::now();
+        cpu_matrix_mult(A.memptr(), B.memptr(), C_cpu.memptr(), m, n, p);
+        auto cpu_end = std::chrono::high_resolution_clock::now();
+        auto duration = std::chrono::duration_cast<std::chrono::microseconds>(cpu_end - cpu_start);
+        cpu_total += duration.count() / 1000.0;
+    }
+    printf("CPU average time: %.3f ms\n\n", cpu_total / NUM_RUNS);
 
-    // CUDA multiplication
+    // CUDA setup
     double *A_d, *B_d, *C_d;
     cudaMalloc((void**)&A_d, m * n * sizeof(double));
     cudaMalloc((void**)&B_d, n * p * sizeof(double));
     cudaMalloc((void**)&C_d, m * p * sizeof(double));
 
+    dim3 threadsPerBlock(16, 16);
+    dim3 numBlocks((m + threadsPerBlock.x - 1) / threadsPerBlock.x, 
+                   (p + threadsPerBlock.y - 1) / threadsPerBlock.y);
+
+    // Memory transfer timing
+    cudaEventRecord(start);
     cudaMemcpy(A_d, A.memptr(), m * n * sizeof(double), cudaMemcpyHostToDevice);
     cudaMemcpy(B_d, B.memptr(), n * p * sizeof(double), cudaMemcpyHostToDevice);
+    cudaEventRecord(stop);
+    cudaEventSynchronize(stop);
+    cudaEventElapsedTime(&gpu_milliseconds, start, stop);
+    float memory_transfer_time = gpu_milliseconds;
+    printf("GPU memory transfer time (H2D): %.3f ms\n", memory_transfer_time);
 
-    dim3 threadsPerBlock(16, 16);
-    dim3 numBlocks((m + threadsPerBlock.x - 1) / threadsPerBlock.x, (p + threadsPerBlock.y - 1) / threadsPerBlock.y);
-
+    // Warmup run for GPU
     matrix_mult<<<numBlocks, threadsPerBlock>>>(A_d, B_d, C_d, m, n, p);
-    
+    cudaDeviceSynchronize();
+
+    // Regular CUDA multiplication timing
+    float cuda_total = 0;
     arma::mat C_cuda(m, p);
+    for (int run = 0; run < NUM_RUNS; run++) {
+        cudaEventRecord(start);
+        matrix_mult<<<numBlocks, threadsPerBlock>>>(A_d, B_d, C_d, m, n, p);
+        cudaEventRecord(stop);
+        cudaEventSynchronize(stop);
+        cudaEventElapsedTime(&gpu_milliseconds, start, stop);
+        cuda_total += gpu_milliseconds;
+    }
+    
+    // Time device to host transfer
+    cudaEventRecord(start);
     cudaMemcpy(C_cuda.memptr(), C_d, m * p * sizeof(double), cudaMemcpyDeviceToHost);
+    cudaEventRecord(stop);
+    cudaEventSynchronize(stop);
+    cudaEventElapsedTime(&gpu_milliseconds, start, stop);
+    float d2h_transfer_time = gpu_milliseconds;
+    
+    printf("CUDA computation average time: %.3f ms\n", cuda_total / NUM_RUNS);
+    printf("GPU memory transfer time (D2H): %.3f ms\n", d2h_transfer_time);
+    printf("CUDA total time (with transfers): %.3f ms\n\n", 
+           (cuda_total / NUM_RUNS) + memory_transfer_time + d2h_transfer_time);
 
-    printf("CUDA result:\n");
-    print_matrix(m, p, C_cuda.memptr(), false);
-    printf("\n");
-
-    // Tiled CUDA multiplication
-    arma::mat C_cuda_tiled(m, p);
+    // Warmup run for tiled GPU
     matrix_mult_tiled<<<numBlocks, threadsPerBlock>>>(A_d, B_d, C_d, m, n, p);
+    cudaDeviceSynchronize();
+
+    // Tiled CUDA multiplication timing
+    float cuda_tiled_total = 0;
+    arma::mat C_cuda_tiled(m, p);
+    for (int run = 0; run < NUM_RUNS; run++) {
+        cudaEventRecord(start);
+        matrix_mult_tiled<<<numBlocks, threadsPerBlock>>>(A_d, B_d, C_d, m, n, p);
+        cudaEventRecord(stop);
+        cudaEventSynchronize(stop);
+        cudaEventElapsedTime(&gpu_milliseconds, start, stop);
+        cuda_tiled_total += gpu_milliseconds;
+    }
     
     cudaMemcpy(C_cuda_tiled.memptr(), C_d, m * p * sizeof(double), cudaMemcpyDeviceToHost);
-
-    printf("CUDA Tiled result:\n");
-    print_matrix(m, p, C_cuda_tiled.memptr(), false);
-    printf("\n");
+    
+    printf("CUDA Tiled computation average time: %.3f ms\n", cuda_tiled_total / NUM_RUNS);
+    printf("CUDA Tiled total time (with transfers): %.3f ms\n\n", 
+           (cuda_tiled_total / NUM_RUNS) + memory_transfer_time + d2h_transfer_time);
 
     // Compare results
     double tolerance = 1e-6;
@@ -171,13 +229,17 @@ int main() {
     bool cuda_match = compare_matrices(C_arma.memptr(), C_cuda.memptr(), m, p, tolerance);
     bool cuda_tiled_match = compare_matrices(C_arma.memptr(), C_cuda_tiled.memptr(), m, p, tolerance);
 
+    printf("Verification Results:\n");
     printf("CPU result matches Armadillo: %s\n", cpu_match ? "Yes" : "No");
     printf("CUDA result matches Armadillo: %s\n", cuda_match ? "Yes" : "No");
     printf("CUDA Tiled result matches Armadillo: %s\n", cuda_tiled_match ? "Yes" : "No");
 
+    // Cleanup
     cudaFree(A_d);
     cudaFree(B_d);
     cudaFree(C_d);
+    cudaEventDestroy(start);
+    cudaEventDestroy(stop);
 
     return 0;
 }

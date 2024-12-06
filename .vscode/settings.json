@@ -9,6 +9,7 @@
         "queue": "cpp",
         "stack": "cpp",
         "__config": "cpp",
-        "armadillo": "cpp"
+        "armadillo": "cpp",
+        "chrono": "cpp"
     }
 }
