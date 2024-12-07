@@ -143,14 +143,12 @@ int main() {
     // CPU multiplication timing
     double cpu_total = 0;
     arma::mat C_cpu(m, p);
-    for (int run = 0; run < NUM_RUNS; run++) {
-        auto cpu_start = std::chrono::high_resolution_clock::now();
-        cpu_matrix_mult(A.memptr(), B.memptr(), C_cpu.memptr(), m, n, p);
-        auto cpu_end = std::chrono::high_resolution_clock::now();
-        auto duration = std::chrono::duration_cast<std::chrono::microseconds>(cpu_end - cpu_start);
-        cpu_total += duration.count() / 1000.0;
-    }
-    printf("CPU average time: %.3f ms\n\n", cpu_total / NUM_RUNS);
+    auto cpu_start = std::chrono::high_resolution_clock::now();
+    cpu_matrix_mult(A.memptr(), B.memptr(), C_cpu.memptr(), m, n, p);
+    auto cpu_end = std::chrono::high_resolution_clock::now();
+    auto duration = std::chrono::duration_cast<std::chrono::microseconds>(cpu_end - cpu_start);
+    cpu_total += duration.count() / 1000.0;
+    printf("CPU average time: %.3f ms\n\n", cpu_total);
 
     // CUDA setup
     double *A_d, *B_d, *C_d;
@@ -158,7 +156,7 @@ int main() {
     cudaMalloc((void**)&B_d, n * p * sizeof(double));
     cudaMalloc((void**)&C_d, m * p * sizeof(double));
 
-    dim3 threadsPerBlock(16, 16);
+    dim3 threadsPerBlock(TILE_SIZE, TILE_SIZE);
     dim3 numBlocks((m + threadsPerBlock.x - 1) / threadsPerBlock.x, 
                    (p + threadsPerBlock.y - 1) / threadsPerBlock.y);
 
@@ -169,12 +167,15 @@ int main() {
     cudaEventRecord(stop);
     cudaEventSynchronize(stop);
     cudaEventElapsedTime(&gpu_milliseconds, start, stop);
-    float memory_transfer_time = gpu_milliseconds;
-    printf("GPU memory transfer time (H2D): %.3f ms\n", memory_transfer_time);
+    float h2d_transfer_time = gpu_milliseconds;
 
     // Warmup run for GPU
     matrix_mult<<<numBlocks, threadsPerBlock>>>(A_d, B_d, C_d, m, n, p);
-    cudaDeviceSynchronize();
+    cudaError_t error = cudaGetLastError();
+    if(error != cudaSuccess) {
+        printf("CUDA error calling matrix_mult(): %s\n", cudaGetErrorString(error));
+        exit(1);
+    }
 
     // Regular CUDA multiplication timing
     float cuda_total = 0;
@@ -195,15 +196,14 @@ int main() {
     cudaEventSynchronize(stop);
     cudaEventElapsedTime(&gpu_milliseconds, start, stop);
     float d2h_transfer_time = gpu_milliseconds;
-    
-    printf("CUDA computation average time: %.3f ms\n", cuda_total / NUM_RUNS);
-    printf("GPU memory transfer time (D2H): %.3f ms\n", d2h_transfer_time);
-    printf("CUDA total time (with transfers): %.3f ms\n\n", 
-           (cuda_total / NUM_RUNS) + memory_transfer_time + d2h_transfer_time);
 
     // Warmup run for tiled GPU
     matrix_mult_tiled<<<numBlocks, threadsPerBlock>>>(A_d, B_d, C_d, m, n, p);
-    cudaDeviceSynchronize();
+    error = cudaGetLastError();
+    if(error != cudaSuccess) {
+        printf("CUDA error calling matrix_mult_tiled(): %s\n", cudaGetErrorString(error));
+        exit(1);
+    }
 
     // Tiled CUDA multiplication timing
     float cuda_tiled_total = 0;
@@ -217,11 +217,36 @@ int main() {
         cuda_tiled_total += gpu_milliseconds;
     }
     
+    // Time device to host transfer for tiled version
+    cudaEventRecord(start);
     cudaMemcpy(C_cuda_tiled.memptr(), C_d, m * p * sizeof(double), cudaMemcpyDeviceToHost);
-    
-    printf("CUDA Tiled computation average time: %.3f ms\n", cuda_tiled_total / NUM_RUNS);
-    printf("CUDA Tiled total time (with transfers): %.3f ms\n\n", 
-           (cuda_tiled_total / NUM_RUNS) + memory_transfer_time + d2h_transfer_time);
+    cudaEventRecord(stop);
+    cudaEventSynchronize(stop);
+    cudaEventElapsedTime(&gpu_milliseconds, start, stop);
+    float d2h_transfer_time_tiled = gpu_milliseconds;
+
+    // Print timing results in a table
+    printf("\nPerformance Results:\n");
+    printf("----------------------------------------------------------------------\n");
+    printf("| Method      | Computation | H2D Transfer | D2H Transfer | Total    |\n");
+    printf("|-------------|-------------|--------------|--------------|----------|\n");
+    printf("| CUDA        | %11.3f | %12.3f | %12.3f | %8.3f |\n",
+           cuda_total / NUM_RUNS,
+           h2d_transfer_time,
+           d2h_transfer_time,
+           (cuda_total / NUM_RUNS) + h2d_transfer_time + d2h_transfer_time);
+    printf("| CUDA Tiled  | %11.3f | %12.3f | %12.3f | %8.3f |\n",
+           cuda_tiled_total / NUM_RUNS,
+           h2d_transfer_time,
+           d2h_transfer_time_tiled,
+           (cuda_tiled_total / NUM_RUNS) + h2d_transfer_time + d2h_transfer_time_tiled);
+    printf("----------------------------------------------------------------------\n");
+    printf("All times in milliseconds (ms)\n\n");
+
+    // CPU results for comparison
+    printf("CPU Results:\n");
+    printf("Armadillo: %.3f ms\n", arma_total / NUM_RUNS);
+    printf("Basic CPU: %.3f ms\n\n", cpu_total);
 
     // Compare results
     double tolerance = 1e-6;
