@@ -12,12 +12,12 @@ __host__ __device__ int idx_col(int i, int j, int colSize) {
     return i + j * colSize;
 }
 
-__global__ void matrix_mult(double *A, double *B, double *C, int m, int n, int p) {
+__global__ void matrix_mult(float *A, float *B, float *C, int m, int n, int p) {
     int j = blockIdx.x * blockDim.x + threadIdx.x;
     int i = blockIdx.y * blockDim.y + threadIdx.y;
 
     if (i < m && j < p) {
-        double sum = 0;
+        float sum = 0;
         for (int k = 0; k < n; k++) {
             sum += A[idx(i, k, n)] * B[idx(k, j, p)];
         }
@@ -25,12 +25,11 @@ __global__ void matrix_mult(double *A, double *B, double *C, int m, int n, int p
     }
 }
 
-// Add this constant for tile size
 #define TILE_SIZE 16
 
-__global__ void matrix_mult_tiled(double *A, double *B, double *C, int m, int n, int p) {
-    __shared__ double A_tile[TILE_SIZE][TILE_SIZE];
-    __shared__ double B_tile[TILE_SIZE][TILE_SIZE];
+__global__ void matrix_mult_tiled(float *A, float *B, float *C, int m, int n, int p) {
+    __shared__ float A_tile[TILE_SIZE][TILE_SIZE];
+    __shared__ float B_tile[TILE_SIZE][TILE_SIZE];
     
     int bx = blockIdx.x;
     int by = blockIdx.y;
@@ -40,26 +39,23 @@ __global__ void matrix_mult_tiled(double *A, double *B, double *C, int m, int n,
     int row = by * TILE_SIZE + ty;
     int col = bx * TILE_SIZE + tx;
     
-    double sum = 0.0;
+    float sum = 0.0f;
     
-    // Loop over tiles
     for (int tile = 0; tile < (n + TILE_SIZE - 1) / TILE_SIZE; tile++) {
-        // Load tiles into shared memory
         if (row < m && (tile * TILE_SIZE + tx) < n) {
             A_tile[ty][tx] = A[idx(row, tile * TILE_SIZE + tx, n)];
         } else {
-            A_tile[ty][tx] = 0.0;
+            A_tile[ty][tx] = 0.0f;
         }
         
         if ((tile * TILE_SIZE + ty) < n && col < p) {
             B_tile[ty][tx] = B[idx(tile * TILE_SIZE + ty, col, p)];
         } else {
-            B_tile[ty][tx] = 0.0;
+            B_tile[ty][tx] = 0.0f;
         }
         
         __syncthreads();
         
-        // Compute partial sum for this tile
         for (int k = 0; k < TILE_SIZE; k++) {
             sum += A_tile[ty][k] * B_tile[k][tx];
         }
@@ -67,16 +63,15 @@ __global__ void matrix_mult_tiled(double *A, double *B, double *C, int m, int n,
         __syncthreads();
     }
     
-    // Write result
     if (row < m && col < p) {
         C[idx(row, col, p)] = sum;
     }
 }
 
-void cpu_matrix_mult(double *A, double *B, double *C, int m, int n, int p) {
+void cpu_matrix_mult(float *A, float *B, float *C, int m, int n, int p) {
     for (int i = 0; i < m; i++) {
         for (int j = 0; j < p; j++) {
-            double sum = 0;
+            float sum = 0;
             for (int k = 0; k < n; k++) {
                 sum += A[idx_col(i, k, n)] * B[idx_col(k, j, p)];
             }
@@ -85,7 +80,7 @@ void cpu_matrix_mult(double *A, double *B, double *C, int m, int n, int p) {
     }
 }
 
-bool compare_matrices(double *A, double *B, int m, int n, double tolerance) {
+bool compare_matrices(float *A, float *B, int m, int n, float tolerance) {
     for (int i = 0; i < m; i++) {
         for (int j = 0; j < n; j++) {
             if (std::abs(A[idx(i, j, n)] - B[idx(i, j, n)]) > tolerance) {
@@ -96,8 +91,7 @@ bool compare_matrices(double *A, double *B, int m, int n, double tolerance) {
     return true;
 }
 
-// Helper function to transpose matrix from column-major to row-major
-void transpose_and_copy(double* dest, const double* src, int rows, int cols) {
+void transpose_and_copy(float* dest, const float* src, int rows, int cols) {
     for(int i = 0; i < rows; i++) {
         for(int j = 0; j < cols; j++) {
             dest[idx(i, j, cols)] = src[idx_col(i, j, rows)];
@@ -106,7 +100,7 @@ void transpose_and_copy(double* dest, const double* src, int rows, int cols) {
 }
 
 int main() {
-    const int NUM_RUNS = 5;  // Number of times to run each method
+    const int NUM_RUNS = 5;
     int m = 1024;
     int n = 1024;
     int p = 1024;
@@ -114,19 +108,18 @@ int main() {
     printf("Matrix dimensions: %dx%d * %dx%d = %dx%d\n", m, n, n, p, m, p);
     printf("Running each method %d times...\n\n", NUM_RUNS);
     
-    // Timing variables
     cudaEvent_t start, stop;
     cudaEventCreate(&start);
     cudaEventCreate(&stop);
     float gpu_milliseconds = 0;
     
-    // Initialize matrices
-    arma::mat A(m, n, arma::fill::randu);
-    arma::mat B(n, p, arma::fill::randu);
+    // Initialize matrices with single precision
+    arma::fmat A(m, n, arma::fill::randu);
+    arma::fmat B(n, p, arma::fill::randu);
 
     // Armadillo multiplication timing
     double arma_total = 0;
-    arma::mat C_arma(m, p);
+    arma::fmat C_arma(m, p);
     for (int run = 0; run < NUM_RUNS; run++) {
         auto cpu_start = std::chrono::high_resolution_clock::now();
         C_arma = A * B;
@@ -138,7 +131,7 @@ int main() {
 
     // CPU multiplication timing
     double cpu_total = 0;
-    arma::mat C_cpu(m, p);
+    arma::fmat C_cpu(m, p);
     auto cpu_start = std::chrono::high_resolution_clock::now();
     cpu_matrix_mult(A.memptr(), B.memptr(), C_cpu.memptr(), m, n, p);
     auto cpu_end = std::chrono::high_resolution_clock::now();
@@ -147,28 +140,26 @@ int main() {
     printf("CPU average time: %.3f ms\n\n", cpu_total);
 
     // CUDA setup
-    double *A_d, *B_d, *C_d;
-    cudaMalloc((void**)&A_d, m * n * sizeof(double));
-    cudaMalloc((void**)&B_d, n * p * sizeof(double));
-    cudaMalloc((void**)&C_d, m * p * sizeof(double));
+    float *A_d, *B_d, *C_d;
+    cudaMalloc((void**)&A_d, m * n * sizeof(float));
+    cudaMalloc((void**)&B_d, n * p * sizeof(float));
+    cudaMalloc((void**)&C_d, m * p * sizeof(float));
 
     dim3 threadsPerBlock(TILE_SIZE, TILE_SIZE);
     dim3 numBlocks((m + threadsPerBlock.x - 1) / threadsPerBlock.x, 
                    (p + threadsPerBlock.y - 1) / threadsPerBlock.y);
 
     // Allocate host memory for row-major matrices
-    double *A_row = new double[m * n];
-    double *B_row = new double[n * p];
-    double *C_row = new double[m * p];
+    float *A_row = new float[m * n];
+    float *B_row = new float[n * p];
+    float *C_row = new float[m * p];
     
-    // Convert matrices from column-major (Armadillo) to row-major
     transpose_and_copy(A_row, A.memptr(), m, n);
     transpose_and_copy(B_row, B.memptr(), n, p);
 
-    // Memory transfer timing
     cudaEventRecord(start);
-    cudaMemcpy(A_d, A_row, m * n * sizeof(double), cudaMemcpyHostToDevice);
-    cudaMemcpy(B_d, B_row, n * p * sizeof(double), cudaMemcpyHostToDevice);
+    cudaMemcpy(A_d, A_row, m * n * sizeof(float), cudaMemcpyHostToDevice);
+    cudaMemcpy(B_d, B_row, n * p * sizeof(float), cudaMemcpyHostToDevice);
     cudaEventRecord(stop);
     cudaEventSynchronize(stop);
     cudaEventElapsedTime(&gpu_milliseconds, start, stop);
@@ -184,7 +175,7 @@ int main() {
 
     // Regular CUDA multiplication timing
     float cuda_total = 0;
-    arma::mat C_cuda(m, p);
+    arma::fmat C_cuda(m, p);
     for (int run = 0; run < NUM_RUNS; run++) {
         cudaEventRecord(start);
         matrix_mult<<<numBlocks, threadsPerBlock>>>(A_d, B_d, C_d, m, n, p);
@@ -194,9 +185,8 @@ int main() {
         cuda_total += gpu_milliseconds;
     }
     
-    // Time device to host transfer
     cudaEventRecord(start);
-    cudaMemcpy(C_cuda.memptr(), C_d, m * p * sizeof(double), cudaMemcpyDeviceToHost);
+    cudaMemcpy(C_cuda.memptr(), C_d, m * p * sizeof(float), cudaMemcpyDeviceToHost);
     cudaEventRecord(stop);
     cudaEventSynchronize(stop);
     cudaEventElapsedTime(&gpu_milliseconds, start, stop);
@@ -212,7 +202,7 @@ int main() {
 
     // Tiled CUDA multiplication timing
     float cuda_tiled_total = 0;
-    arma::mat C_cuda_tiled(m, p);
+    arma::fmat C_cuda_tiled(m, p);
     for (int run = 0; run < NUM_RUNS; run++) {
         cudaEventRecord(start);
         matrix_mult_tiled<<<numBlocks, threadsPerBlock>>>(A_d, B_d, C_d, m, n, p);
@@ -222,15 +212,13 @@ int main() {
         cuda_tiled_total += gpu_milliseconds;
     }
     
-    // Time device to host transfer for tiled version
     cudaEventRecord(start);
-    cudaMemcpy(C_cuda_tiled.memptr(), C_d, m * p * sizeof(double), cudaMemcpyDeviceToHost);
+    cudaMemcpy(C_cuda_tiled.memptr(), C_d, m * p * sizeof(float), cudaMemcpyDeviceToHost);
     cudaEventRecord(stop);
     cudaEventSynchronize(stop);
     cudaEventElapsedTime(&gpu_milliseconds, start, stop);
     float d2h_transfer_time_tiled = gpu_milliseconds;
 
-    // Print timing results in a table
     printf("\nPerformance Results:\n");
     printf("----------------------------------------------------------------------\n");
     printf("| Method      | Computation | H2D Transfer | D2H Transfer | Total    |\n");
@@ -248,13 +236,11 @@ int main() {
     printf("----------------------------------------------------------------------\n");
     printf("All times in milliseconds (ms)\n\n");
 
-    // CPU results for comparison
     printf("CPU Results:\n");
     printf("Armadillo: %.3f ms\n", arma_total / NUM_RUNS);
     printf("Basic CPU: %.3f ms\n\n", cpu_total);
 
-    // Compare results
-    double tolerance = 1e-6;
+    float tolerance = 1e-4f;  // Increased tolerance for float comparison
     bool cpu_match = compare_matrices(C_arma.memptr(), C_cpu.memptr(), m, p, tolerance);
 
     transpose_and_copy(C_row, C_cuda.memptr(), m, p);
@@ -268,16 +254,15 @@ int main() {
     printf("CUDA result matches Armadillo: %s\n", cuda_match ? "Yes" : "No");
     printf("CUDA Tiled result matches Armadillo: %s\n", cuda_tiled_match ? "Yes" : "No");
 
-    // Cleanup
     cudaFree(A_d);
     cudaFree(B_d);
     cudaFree(C_d);
     cudaEventDestroy(start);
     cudaEventDestroy(stop);
 
-    // Additional cleanup
     delete[] A_row;
     delete[] B_row;
+    delete[] C_row;
 
     return 0;
 }
