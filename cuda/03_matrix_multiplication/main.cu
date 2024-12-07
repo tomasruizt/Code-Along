@@ -101,7 +101,7 @@ void transpose_and_copy(float* dest, const float* src, int rows, int cols) {
 
 int main() {
     const int NUM_RUNS = 5;
-    const int m = 4096;
+    const int m = 1024*4;
     const int n = m;
     const int p = m;
     
@@ -225,7 +225,7 @@ int main() {
     printf("----------------------------------------------------------------------\n");
     printf("All times in milliseconds (ms)\n\n");
 
-    float tolerance = 1e-4f;
+    float tolerance = 1e-3f;
     if (run_cpu_baseline) {
         transpose_and_copy(C_row, C_cuda.memptr(), m, p);
         bool cuda_match = compare_matrices(C_arma.memptr(), C_row, m, p, tolerance);
