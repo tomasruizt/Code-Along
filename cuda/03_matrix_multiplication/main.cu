@@ -12,19 +12,6 @@ __host__ __device__ int idx_col(int i, int j, int colSize) {
     return i + j * colSize;
 }
 
-void print_matrix(int m, int n, double *A, bool rowMajor = true) {
-    for (int i = 0; i < m; i++) {
-        for (int j = 0; j < n; j++) {
-            if (rowMajor) {
-                printf("%.6f ", A[idx(i, j, n)]);
-            } else {
-                printf("%.6f ", A[idx_col(i, j, m)]);
-            }
-        }
-        printf("\n");
-    }
-}
-
 __global__ void matrix_mult(double *A, double *B, double *C, int m, int n, int p) {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     int j = blockIdx.y * blockDim.y + threadIdx.y;
