@@ -1,2 +1,7 @@
+COMPILE_CMD = nvcc -g -o program main.cu -larmadillo
+
 run:
-	nvcc -g -o program main.cu -larmadillo && ./program
+	$(COMPILE_CMD) && ./program
+
+profile:
+	$(COMPILE_CMD) && ncu --set full ./program > profile.txt
