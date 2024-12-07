@@ -13,15 +13,15 @@ __host__ __device__ int idx_col(int i, int j, int colSize) {
 }
 
 __global__ void matrix_mult(double *A, double *B, double *C, int m, int n, int p) {
-    int i = blockIdx.x * blockDim.x + threadIdx.x;
-    int j = blockIdx.y * blockDim.y + threadIdx.y;
+    int j = blockIdx.x * blockDim.x + threadIdx.x;
+    int i = blockIdx.y * blockDim.y + threadIdx.y;
 
     if (i < m && j < p) {
         double sum = 0;
         for (int k = 0; k < n; k++) {
-            sum += A[idx_col(i, k, n)] * B[idx_col(k, j, p)];
+            sum += A[idx(i, k, n)] * B[idx(k, j, p)];
         }
-        C[idx_col(i, j, p)] = sum;
+        C[idx(i, j, p)] = sum;
     }
 }
 
@@ -46,13 +46,13 @@ __global__ void matrix_mult_tiled(double *A, double *B, double *C, int m, int n,
     for (int tile = 0; tile < (n + TILE_SIZE - 1) / TILE_SIZE; tile++) {
         // Load tiles into shared memory
         if (row < m && (tile * TILE_SIZE + tx) < n) {
-            A_tile[ty][tx] = A[idx_col(row, tile * TILE_SIZE + tx, n)];
+            A_tile[ty][tx] = A[idx(row, tile * TILE_SIZE + tx, n)];
         } else {
             A_tile[ty][tx] = 0.0;
         }
         
         if ((tile * TILE_SIZE + ty) < n && col < p) {
-            B_tile[ty][tx] = B[idx_col(tile * TILE_SIZE + ty, col, p)];
+            B_tile[ty][tx] = B[idx(tile * TILE_SIZE + ty, col, p)];
         } else {
             B_tile[ty][tx] = 0.0;
         }
@@ -69,7 +69,7 @@ __global__ void matrix_mult_tiled(double *A, double *B, double *C, int m, int n,
     
     // Write result
     if (row < m && col < p) {
-        C[idx_col(row, col, p)] = sum;
+        C[idx(row, col, p)] = sum;
     }
 }
 
@@ -94,6 +94,15 @@ bool compare_matrices(double *A, double *B, int m, int n, double tolerance) {
         }
     }
     return true;
+}
+
+// Helper function to transpose matrix from column-major to row-major
+void transpose_and_copy(double* dest, const double* src, int rows, int cols) {
+    for(int i = 0; i < rows; i++) {
+        for(int j = 0; j < cols; j++) {
+            dest[idx(i, j, cols)] = src[idx_col(i, j, rows)];
+        }
+    }
 }
 
 int main() {
@@ -147,10 +156,19 @@ int main() {
     dim3 numBlocks((m + threadsPerBlock.x - 1) / threadsPerBlock.x, 
                    (p + threadsPerBlock.y - 1) / threadsPerBlock.y);
 
+    // Allocate host memory for row-major matrices
+    double *A_row = new double[m * n];
+    double *B_row = new double[n * p];
+    double *C_row = new double[m * p];
+    
+    // Convert matrices from column-major (Armadillo) to row-major
+    transpose_and_copy(A_row, A.memptr(), m, n);
+    transpose_and_copy(B_row, B.memptr(), n, p);
+
     // Memory transfer timing
     cudaEventRecord(start);
-    cudaMemcpy(A_d, A.memptr(), m * n * sizeof(double), cudaMemcpyHostToDevice);
-    cudaMemcpy(B_d, B.memptr(), n * p * sizeof(double), cudaMemcpyHostToDevice);
+    cudaMemcpy(A_d, A_row, m * n * sizeof(double), cudaMemcpyHostToDevice);
+    cudaMemcpy(B_d, B_row, n * p * sizeof(double), cudaMemcpyHostToDevice);
     cudaEventRecord(stop);
     cudaEventSynchronize(stop);
     cudaEventElapsedTime(&gpu_milliseconds, start, stop);
@@ -238,8 +256,12 @@ int main() {
     // Compare results
     double tolerance = 1e-6;
     bool cpu_match = compare_matrices(C_arma.memptr(), C_cpu.memptr(), m, p, tolerance);
-    bool cuda_match = compare_matrices(C_arma.memptr(), C_cuda.memptr(), m, p, tolerance);
-    bool cuda_tiled_match = compare_matrices(C_arma.memptr(), C_cuda_tiled.memptr(), m, p, tolerance);
+
+    transpose_and_copy(C_row, C_cuda.memptr(), m, p);
+    bool cuda_match = compare_matrices(C_arma.memptr(), C_row, m, p, tolerance);
+
+    transpose_and_copy(C_row, C_cuda_tiled.memptr(), m, p);
+    bool cuda_tiled_match = compare_matrices(C_arma.memptr(), C_row, m, p, tolerance);
 
     printf("Verification Results:\n");
     printf("CPU result matches Armadillo: %s\n", cpu_match ? "Yes" : "No");
@@ -252,6 +274,10 @@ int main() {
     cudaFree(C_d);
     cudaEventDestroy(start);
     cudaEventDestroy(stop);
+
+    // Additional cleanup
+    delete[] A_row;
+    delete[] B_row;
 
     return 0;
 }
