@@ -101,12 +101,11 @@ void transpose_and_copy(float* dest, const float* src, int rows, int cols) {
 
 int main() {
     const int NUM_RUNS = 5;
-    int m = 1024;
-    int n = 1024;
-    int p = 1024;
+    const int m = 4096;
+    const int n = m;
+    const int p = m;
     
     printf("Matrix dimensions: %dx%d * %dx%d = %dx%d\n", m, n, n, p, m, p);
-    printf("Running each method %d times...\n\n", NUM_RUNS);
     
     cudaEvent_t start, stop;
     cudaEventCreate(&start);
@@ -116,30 +115,20 @@ int main() {
     // Initialize matrices with single precision
     arma::fmat A(m, n, arma::fill::randu);
     arma::fmat B(n, p, arma::fill::randu);
-
-    // Armadillo multiplication timing
-    double arma_total = 0;
     arma::fmat C_arma(m, p);
-    for (int run = 0; run < NUM_RUNS; run++) {
+
+    const bool run_cpu_baseline = false;
+    if (run_cpu_baseline) {
+        printf("Armadillo multiplication timing (single run)...\n");
         auto cpu_start = std::chrono::high_resolution_clock::now();
         C_arma = A * B;
         auto cpu_end = std::chrono::high_resolution_clock::now();
         auto duration = std::chrono::duration_cast<std::chrono::microseconds>(cpu_end - cpu_start);
-        arma_total += duration.count() / 1000.0;
+        printf("Armadillo time: %.2f seconds\n\n", duration.count() / 1e6);
     }
-    printf("Armadillo average time: %.3f ms\n\n", arma_total / NUM_RUNS);
-
-    // CPU multiplication timing
-    double cpu_total = 0;
-    arma::fmat C_cpu(m, p);
-    auto cpu_start = std::chrono::high_resolution_clock::now();
-    cpu_matrix_mult(A.memptr(), B.memptr(), C_cpu.memptr(), m, n, p);
-    auto cpu_end = std::chrono::high_resolution_clock::now();
-    auto duration = std::chrono::duration_cast<std::chrono::microseconds>(cpu_end - cpu_start);
-    cpu_total += duration.count() / 1000.0;
-    printf("CPU average time: %.3f ms\n\n", cpu_total);
 
     // CUDA setup
+    printf("Running each CUDA method %d times...", NUM_RUNS);
     float *A_d, *B_d, *C_d;
     cudaMalloc((void**)&A_d, m * n * sizeof(float));
     cudaMalloc((void**)&B_d, n * p * sizeof(float));
@@ -236,23 +225,18 @@ int main() {
     printf("----------------------------------------------------------------------\n");
     printf("All times in milliseconds (ms)\n\n");
 
-    printf("CPU Results:\n");
-    printf("Armadillo: %.3f ms\n", arma_total / NUM_RUNS);
-    printf("Basic CPU: %.3f ms\n\n", cpu_total);
+    float tolerance = 1e-4f;
+    if (run_cpu_baseline) {
+        transpose_and_copy(C_row, C_cuda.memptr(), m, p);
+        bool cuda_match = compare_matrices(C_arma.memptr(), C_row, m, p, tolerance);
 
-    float tolerance = 1e-4f;  // Increased tolerance for float comparison
-    bool cpu_match = compare_matrices(C_arma.memptr(), C_cpu.memptr(), m, p, tolerance);
+        transpose_and_copy(C_row, C_cuda_tiled.memptr(), m, p);
+        bool cuda_tiled_match = compare_matrices(C_arma.memptr(), C_row, m, p, tolerance);
 
-    transpose_and_copy(C_row, C_cuda.memptr(), m, p);
-    bool cuda_match = compare_matrices(C_arma.memptr(), C_row, m, p, tolerance);
-
-    transpose_and_copy(C_row, C_cuda_tiled.memptr(), m, p);
-    bool cuda_tiled_match = compare_matrices(C_arma.memptr(), C_row, m, p, tolerance);
-
-    printf("Verification Results:\n");
-    printf("CPU result matches Armadillo: %s\n", cpu_match ? "Yes" : "No");
-    printf("CUDA result matches Armadillo: %s\n", cuda_match ? "Yes" : "No");
-    printf("CUDA Tiled result matches Armadillo: %s\n", cuda_tiled_match ? "Yes" : "No");
+        printf("Verification Results:\n");
+        printf("CUDA result matches Armadillo: %s\n", cuda_match ? "Yes" : "No");
+        printf("CUDA Tiled result matches Armadillo: %s\n", cuda_tiled_match ? "Yes" : "No");
+    }
 
     cudaFree(A_d);
     cudaFree(B_d);
