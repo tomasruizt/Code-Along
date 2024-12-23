@@ -68,6 +68,40 @@ __global__ void matrix_mult_tiled(float *A, float *B, float *C, int m, int n, in
     }
 }
 
+// Without bounds checking for blog post
+__global__ void tiledMatMulWithoutBoundsCheck(float *A, float *B, float *C, int n) {
+    // Define shared memory arrays (cache)
+    __shared__ float As[TILE_SIZE][TILE_SIZE];
+    __shared__ float Bs[TILE_SIZE][TILE_SIZE];
+    
+    // CUDA thread variables
+    int row = blockIdx.y * blockDim.y + threadIdx.y;
+    int col = blockIdx.x * blockDim.x + threadIdx.x;
+    
+    float C_ij = 0.0f;
+    
+    // Loop over the blocks
+    for (int t = 0; t < n / TILE_SIZE; t++) {
+        // Transfer data from main memory into the cache
+        As[threadIdx.y][threadIdx.x] = A[row * n + t * TILE_SIZE + threadIdx.x];
+        Bs[threadIdx.y][threadIdx.x] = B[(t * TILE_SIZE + threadIdx.y) * n + col];
+        
+        // Ensure data transfer is complete before proceeding
+        __syncthreads();
+        
+        // Matrix multiply both blocks
+        for (int k = 0; k < TILE_SIZE; k++) {
+            C_ij += As[threadIdx.y][k] * Bs[k][threadIdx.x];
+        }
+        
+        // Finish multiplying the blocks before overwriting the cache next iteration
+        __syncthreads();
+    }
+    
+    // Transfer the result back to global memory
+    C[row * n + col] = C_ij;
+}
+
 void cpu_matrix_mult(float *A, float *B, float *C, int m, int n, int p) {
     for (int i = 0; i < m; i++) {
         for (int j = 0; j < p; j++) {
@@ -101,7 +135,7 @@ void transpose_and_copy(float* dest, const float* src, int rows, int cols) {
 
 int main() {
     const int NUM_RUNS = 5;
-    const int m = 1024*4;
+    const int m = 1024*1;
     const int n = m;
     const int p = m;
     
@@ -117,7 +151,7 @@ int main() {
     arma::fmat B(n, p, arma::fill::randu);
     arma::fmat C_arma(m, p);
 
-    const bool run_cpu_baseline = false;
+    const bool run_cpu_baseline = true;
     if (run_cpu_baseline) {
         printf("Armadillo multiplication timing (single run)...\n");
         auto cpu_start = std::chrono::high_resolution_clock::now();
@@ -208,6 +242,25 @@ int main() {
     cudaEventElapsedTime(&gpu_milliseconds, start, stop);
     float d2h_transfer_time_tiled = gpu_milliseconds;
 
+    // Tiled CUDA multiplication without bounds checking
+    float tiled_wo_bc_total = 0;
+    arma::fmat C_cuda_tiled_wo_bc(m, p);
+    for (int run = 0; run < NUM_RUNS; run++) {
+        cudaEventRecord(start);
+        tiledMatMulWithoutBoundsCheck<<<numBlocks, threadsPerBlock>>>(A_d, B_d, C_d, n);
+        cudaEventRecord(stop);
+        cudaEventSynchronize(stop);
+        cudaEventElapsedTime(&gpu_milliseconds, start, stop);
+        tiled_wo_bc_total += gpu_milliseconds;
+    }
+    
+    cudaEventRecord(start);
+    cudaMemcpy(C_cuda_tiled_wo_bc.memptr(), C_d, m * p * sizeof(float), cudaMemcpyDeviceToHost);
+    cudaEventRecord(stop);
+    cudaEventSynchronize(stop);
+    cudaEventElapsedTime(&gpu_milliseconds, start, stop);
+    float d2h_transfer_time_simple = gpu_milliseconds;
+
     printf("\nPerformance Results:\n");
     printf("----------------------------------------------------------------------\n");
     printf("| Method      | Computation | H2D Transfer | D2H Transfer | Total    |\n");
@@ -222,11 +275,19 @@ int main() {
            h2d_transfer_time,
            d2h_transfer_time_tiled,
            (cuda_tiled_total / NUM_RUNS) + h2d_transfer_time + d2h_transfer_time_tiled);
+    printf("| Tiled wo BC | %11.3f | %12.3f | %12.3f | %8.3f |\n",
+           tiled_wo_bc_total / NUM_RUNS,
+           h2d_transfer_time,
+           d2h_transfer_time_simple,
+           (tiled_wo_bc_total / NUM_RUNS) + h2d_transfer_time + d2h_transfer_time_simple);
     printf("----------------------------------------------------------------------\n");
     printf("All times in milliseconds (ms)\n\n");
 
     float tolerance = 1e-3f;
     if (run_cpu_baseline) {
+        transpose_and_copy(C_row, C_cuda_tiled_wo_bc.memptr(), m, p);
+        bool cuda_simple_match = compare_matrices(C_arma.memptr(), C_row, m, p, tolerance);
+
         transpose_and_copy(C_row, C_cuda.memptr(), m, p);
         bool cuda_match = compare_matrices(C_arma.memptr(), C_row, m, p, tolerance);
 
@@ -234,6 +295,7 @@ int main() {
         bool cuda_tiled_match = compare_matrices(C_arma.memptr(), C_row, m, p, tolerance);
 
         printf("Verification Results:\n");
+        printf("Tiled wo BC result matches Armadillo: %s\n", cuda_simple_match ? "Yes" : "No");
         printf("CUDA result matches Armadillo: %s\n", cuda_match ? "Yes" : "No");
         printf("CUDA Tiled result matches Armadillo: %s\n", cuda_tiled_match ? "Yes" : "No");
     }
