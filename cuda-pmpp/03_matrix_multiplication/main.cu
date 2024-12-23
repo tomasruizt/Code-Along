@@ -71,8 +71,8 @@ __global__ void matrix_mult_tiled(float *A, float *B, float *C, int m, int n, in
 // Without bounds checking for blog post
 __global__ void tiledMatMulWithoutBoundsCheck(float *A, float *B, float *C, int n) {
     // Define shared memory arrays (cache)
-    __shared__ float As[TILE_SIZE][TILE_SIZE];
-    __shared__ float Bs[TILE_SIZE][TILE_SIZE];
+    __shared__ float A_block[TILE_SIZE][TILE_SIZE];
+    __shared__ float B_block[TILE_SIZE][TILE_SIZE];
     
     // CUDA thread variables
     int row = blockIdx.y * blockDim.y + threadIdx.y;
@@ -83,15 +83,15 @@ __global__ void tiledMatMulWithoutBoundsCheck(float *A, float *B, float *C, int 
     // Loop over the blocks
     for (int t = 0; t < n / TILE_SIZE; t++) {
         // Transfer data from main memory into the cache
-        As[threadIdx.y][threadIdx.x] = A[row * n + t * TILE_SIZE + threadIdx.x];
-        Bs[threadIdx.y][threadIdx.x] = B[(t * TILE_SIZE + threadIdx.y) * n + col];
+        A_block[threadIdx.y][threadIdx.x] = A[row * n + t * TILE_SIZE + threadIdx.x];
+        B_block[threadIdx.y][threadIdx.x] = B[(t * TILE_SIZE + threadIdx.y) * n + col];
         
         // Ensure data transfer is complete before proceeding
         __syncthreads();
         
         // Matrix multiply both blocks
         for (int k = 0; k < TILE_SIZE; k++) {
-            C_ij += As[threadIdx.y][k] * Bs[k][threadIdx.x];
+            C_ij += A_block[threadIdx.y][k] * B_block[k][threadIdx.x];
         }
         
         // Finish multiplying the blocks before overwriting the cache next iteration
