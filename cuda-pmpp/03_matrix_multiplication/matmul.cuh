@@ -1,8 +1,5 @@
 #pragma once
 
-#define ARMA_ALLOW_FAKE_GCC
-#include <armadillo>
-
 #define TILE_SIZE 16
 
 // Function declarations

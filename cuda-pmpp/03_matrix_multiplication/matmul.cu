@@ -1,8 +1,4 @@
-#define ARMA_ALLOW_FAKE_GCC
-#include <armadillo>
-#include <stdio.h>
-
-#define TILE_SIZE 16
+#include "matmul.cuh"
 
 // Function implementations
 __host__ __device__ int idx(int i, int j, int rowSize) {
