@@ -1,7 +1,20 @@
-COMPILE_CMD = nvcc -g -o program main.cu -larmadillo
+NVCC = nvcc
+CFLAGS = -g
+LIBS = -larmadillo
 
-run:
-	echo "compiling..." && $(COMPILE_CMD) && echo "running..." && ./program
+OBJECTS = matmul.o
 
-profile:
-	$(COMPILE_CMD) && ncu --set full ./program > profile.txt
+program: $(OBJECTS) main1.cu
+	$(NVCC) $(CFLAGS) $(OBJECTS) main1.cu -o program $(LIBS)
+
+%.o: %.cu %.cuh
+	$(NVCC) $(CFLAGS) -c $< -o $@
+
+run: program
+	echo "running..." && ./program
+
+profile: program
+	ncu --set full ./program > profile.txt
+
+clean:
+	rm -f program $(OBJECTS)
