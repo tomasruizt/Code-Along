@@ -1,15 +1,14 @@
 import math
 import torch
 
-torch.manual_seed(0)
 
-x = torch.randn(6)
-s = x.softmax(dim=0)
-print(x)
-print(s)
+def py_softmax(x: torch.Tensor) -> torch.Tensor:
+    s = [None] * len(x)
+    py_softmax_kernel(x.tolist(), s, len(x))
+    return torch.tensor(s)
 
 
-def py_softmax(x, out, n):
+def py_softmax_kernel(x: list[float], out: list[float], n: int):
     d_jm1 = 0.0  # normalization term
     m_jm1 = float("-inf")  # maximum value
     for j in range(n):
@@ -27,7 +26,10 @@ def py_softmax(x, out, n):
         out[i] = yi
 
 
-s_py = [None] * len(x)
-py_softmax(x.tolist(), s_py, len(x))
-print(torch.tensor(s_py))
-assert torch.allclose(torch.tensor(s_py), s)
+x = torch.arange(5).float()
+s_torch = x.softmax(dim=0)
+s_py = py_softmax(x)
+print("x =".rjust(20), repr(x))
+print("torch::softmax(x) =".rjust(20), repr(s_torch))
+print("python::softmax(x) =".rjust(20), repr(s_py))
+assert torch.allclose(s_py, s_torch)
