@@ -1,5 +1,8 @@
 #include <stdio.h>
 
+// Define a type for kernel sum functions
+typedef void (*SumFn)(float* vec_d, int len, float* sum_d);
+
 __global__ void cudaNaiveSumKernel(float* vec, int len, float* result) {
     unsigned int tx = threadIdx.x;  // Apparently the unsigned int is required
     // The particular stride creates uncoalesced memory access
@@ -12,17 +15,22 @@ __global__ void cudaNaiveSumKernel(float* vec, int len, float* result) {
         result[0] = vec[0];
 }
 
-float cudaNaiveSum(float *vec, int len)
+void cudaNaiveSum(float* vec_d, int len, float* sum_d) {
+    dim3 threadsPerBlock(len / 2);
+    dim3 numBlocks(1);
+    cudaNaiveSumKernel<<<numBlocks, threadsPerBlock>>>(vec_d, len, sum_d);
+}
+
+float cudaSum(float *vec, int len, SumFn sum)
 {
     float *sum_h = new float[1];
     float *sum_d, *vec_d;
     cudaMalloc((void **)&sum_d, sizeof(float));
     cudaMalloc((void **)&vec_d, len * sizeof(float));
     cudaMemcpy(vec_d, vec, len * sizeof(float), cudaMemcpyHostToDevice);
-
-    dim3 threadsPerBlock(len / 2);
-    dim3 numBlocks(1);
-    cudaNaiveSumKernel<<<numBlocks, threadsPerBlock>>>(vec_d, len, sum_d);
+    
+    sum(vec_d, len, sum_d);
+    
     cudaError_t err = cudaGetLastError();
     if (err != cudaSuccess) {
         printf("CUDA error: %s\n", cudaGetErrorString(err));
@@ -58,7 +66,13 @@ int main() {
     float sum = cpu_sum(vec, n);
     printf("CPU sum: %.2f\n", sum);
 
-    float sum_h = cudaNaiveSum(vec, n);
-    printf("CUDA sum: %.2f\n", sum_h);
+    // Use the naive kernel
+    float sum_h = cudaSum(vec, n, cudaNaiveSum);
+    printf("CUDA naive sum: %.2f\n", sum_h);
+
+    // Use a different kernel (example)
+    // float sum_h2 = cudaSum(vec, n, launchOtherKernel);
+    // printf("CUDA other sum: %.2f\n", sum_h2);
+    
     return 0;
 }
