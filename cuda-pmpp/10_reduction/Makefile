@@ -1,13 +1,13 @@
-COMPILE_CMD = nvcc -g -o program main.cu
+COMPILE_CMD = nvcc -o program main.cu
 
 run: compile
-	echo "running..." && ./program
+	./program
 
 compile:
-	echo "compiling..." && $(COMPILE_CMD)
+	$(COMPILE_CMD)
 
 debug_compile:
-	echo "compiling..." && $(COMPILE_CMD) -g -G
+	$(COMPILE_CMD) -g -G
 
 profile:
-	$(COMPILE_CMD) && ncu --set full ./program > profile.txt
+	$(COMPILE_CMD) -g && ncu --set full ./program > profile.txt

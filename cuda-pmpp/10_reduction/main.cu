@@ -30,7 +30,13 @@ __global__ void cudaContinguousSumKernel(float* vec, int len, float* result) {
 }
 
 
-const int BLOCK_SIZE = 1024;
+const int BLOCK_SIZE = 256;  // to fit 3 per SM
+
+struct rtx3090 {
+    int threads_per_sm = 1536;
+    int blocks_per_sm = threads_per_sm / BLOCK_SIZE;
+    int numSM = 82;
+};
 
 __global__ void cudaSharedMemSumKernel(float* vec, int len, float* result) {
     __shared__ float vec_s[BLOCK_SIZE];
@@ -101,8 +107,14 @@ float* randu(int n) {
 }
 
 int main() {
-    int n = 1024 * 10 - 1;
-    printf("n: %d\n", n);
+    auto gpu = rtx3090();
+    int nBlocks = gpu.blocks_per_sm * gpu.numSM;
+    int nThreads = gpu.threads_per_sm * gpu.numSM;
+    printf("nBlocks: %d\n", nBlocks);
+    printf("nThreads: %d\n", nThreads);
+    int n = nThreads * 2;
+    
+    printf("vec size (n): %d\n", n);
     float* vec = randu(n);
     float sum = cpu_sum(vec, n);
     printf("CPU sum: %.2f\n", sum);
@@ -116,6 +128,6 @@ int main() {
 
     float sum_h3 = cudaSum(vec, n, cudaSharedMemSumKernel);
     printf("CUDA sharedmem sum: %.2f\n", sum_h3);
-    
+
     return 0;
 }
