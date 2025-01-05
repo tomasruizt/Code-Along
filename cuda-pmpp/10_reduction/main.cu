@@ -30,6 +30,24 @@ __global__ void cudaContinguousSumKernel(float* vec, int len, float* result) {
 }
 
 
+const int BLOCK_SIZE = 1024;
+
+__global__ void cudaSharedMemSumKernel(float* vec, int len, float* result) {
+    __shared__ float vec_s[BLOCK_SIZE];
+    unsigned int tx = threadIdx.x;
+    unsigned int i = tx + (2 * blockIdx.x * blockDim.x);
+    // populate shared memory
+    vec_s[tx] = vec[i] + vec[i + blockDim.x];
+    for (unsigned int stride = blockDim.x / 2; stride > 0; stride /= 2) {
+        __syncthreads();
+        if (tx < stride && i + stride < len) {
+            vec_s[tx] += vec_s[tx + stride];
+        }
+    }
+    if (tx == 0)
+        atomicAdd(result, vec_s[tx]);
+}
+
 float cudaSum(float *vec, int len, SumFn sum)
 {
     float *sum_h = new float[1];
@@ -38,7 +56,7 @@ float cudaSum(float *vec, int len, SumFn sum)
     cudaMalloc((void **)&vec_d, len * sizeof(float));
     cudaMemcpy(vec_d, vec, len * sizeof(float), cudaMemcpyHostToDevice);
     
-    dim3 threadsPerBlock(1024);
+    dim3 threadsPerBlock(BLOCK_SIZE);
     dim3 numBlocks(ceil(len / (2.0 * threadsPerBlock.x)));
     // printf("numBlocks: %d\n", numBlocks.x);
     // printf("threadsPerBlock: %d\n", threadsPerBlock.x);
@@ -73,10 +91,19 @@ float cpu_sum(float* vec, int len) {
     return sum;
 }
 
+float* randu(int n) {
+    srand(0);
+    float* vec = new float[n];
+    for (int i = 0; i < n; i++) {
+        vec[i] = rand() / (float)RAND_MAX;
+    }
+    return vec;
+}
+
 int main() {
-    int n = 1024 * 10 + 1;
+    int n = 1024 * 10 - 1;
     printf("n: %d\n", n);
-    float* vec = ones(n);
+    float* vec = randu(n);
     float sum = cpu_sum(vec, n);
     printf("CPU sum: %.2f\n", sum);
 
@@ -86,6 +113,9 @@ int main() {
 
     float sum_h2 = cudaSum(vec, n, cudaContinguousSumKernel);
     printf("CUDA contiguous sum: %.2f\n", sum_h2);
+
+    float sum_h3 = cudaSum(vec, n, cudaSharedMemSumKernel);
+    printf("CUDA sharedmem sum: %.2f\n", sum_h3);
     
     return 0;
 }
