@@ -5,20 +5,15 @@ typedef void (*SumFn)(float* vec_d, int len, float* sum_d);
 
 __global__ void cudaNaiveSumKernel(float* vec, int len, float* result) {
     unsigned int tx = threadIdx.x;  // Apparently the unsigned int is required
+    unsigned int i = 2 * tx + (2 * blockIdx.x * blockDim.x);
     // The particular stride creates uncoalesced memory access
     for (unsigned int stride = 1; stride <= blockDim.x; stride *= 2) {
-        if (tx % stride == 0)
-            vec[2 * tx] += vec[2 * tx + stride];
+        if ((tx % stride == 0) && (i + stride) < len)
+            vec[i] += vec[i + stride];
         __syncthreads();
     }
     if (tx == 0)
-        result[0] = vec[0];
-}
-
-void cudaNaiveSum(float* vec_d, int len, float* sum_d) {
-    dim3 threadsPerBlock(len / 2);
-    dim3 numBlocks(1);
-    cudaNaiveSumKernel<<<numBlocks, threadsPerBlock>>>(vec_d, len, sum_d);
+        atomicAdd(result, vec[i]);
 }
 
 __global__ void cudaContinguousSumKernel(float* vec, int len, float* result) {
@@ -30,14 +25,9 @@ __global__ void cudaContinguousSumKernel(float* vec, int len, float* result) {
         __syncthreads();
     }
     if (i == 0)
-        result[0] = vec[0];
+        atomicAdd(result, vec[0]);
 }
 
-void cudaContinguousSum(float* vec_d, int len, float* sum_d) {
-    dim3 threadsPerBlock(len / 2);
-    dim3 numBlocks(1);
-    cudaContinguousSumKernel<<<numBlocks, threadsPerBlock>>>(vec_d, len, sum_d);
-}
 
 float cudaSum(float *vec, int len, SumFn sum)
 {
@@ -47,7 +37,11 @@ float cudaSum(float *vec, int len, SumFn sum)
     cudaMalloc((void **)&vec_d, len * sizeof(float));
     cudaMemcpy(vec_d, vec, len * sizeof(float), cudaMemcpyHostToDevice);
     
-    sum(vec_d, len, sum_d);
+    dim3 threadsPerBlock(1024);
+    dim3 numBlocks(ceil(len / (2.0 * threadsPerBlock.x)));
+    printf("numBlocks: %d\n", numBlocks.x);
+    printf("threadsPerBlock: %d\n", threadsPerBlock.x);
+    sum<<<numBlocks, threadsPerBlock>>>(vec_d, len, sum_d);
     
     cudaError_t err = cudaGetLastError();
     if (err != cudaSuccess) {
@@ -60,12 +54,12 @@ float cudaSum(float *vec, int len, SumFn sum)
     return sum_h[0];
 }
 
-float* arange(int n)
+float* ones(int n)
 {
     float* vec = new float[n];
     for (int i = 0; i < n; i++)
     {
-        vec[i] = i + 1;
+        vec[i] = 1.0f;
     }
     return vec;
 }
@@ -79,17 +73,18 @@ float cpu_sum(float* vec, int len) {
 }
 
 int main() {
-    int n = 1024 * 2;  // cudaNaiveSum and cudaContiguous only work on a single block atm
-    float* vec = arange(n);
+    int n = 1024 * 10 + 1;  // cudaNaiveSum and cudaContiguous only work on a single block atm
+    printf("n: %d\n", n);
+    float* vec = ones(n);
     float sum = cpu_sum(vec, n);
     printf("CPU sum: %.2f\n", sum);
 
     // Use the naive kernel
-    float sum_h = cudaSum(vec, n, cudaNaiveSum);
+    float sum_h = cudaSum(vec, n, cudaNaiveSumKernel);
     printf("CUDA naive sum: %.2f\n", sum_h);
 
-    float sum_h2 = cudaSum(vec, n, cudaContinguousSum);
-    printf("CUDA contiguous sum: %.2f\n", sum_h2);
+    // float sum_h2 = cudaSum(vec, n, cudaContinguousSumKernel);
+    // printf("CUDA contiguous sum: %.2f\n", sum_h2);
     
     return 0;
 }
