@@ -14,7 +14,7 @@ to_tensor = ToTensor()
 img_size = 28
 
 
-class VisionModel(nn.Module):
+class CNNModel(nn.Module):
     def __init__(self):
         super().__init__()
         self.layers = nn.Sequential(
@@ -42,16 +42,20 @@ def mean_accuracy(logits, labels):
     return (logits.argmax(dim=1) == labels).float().mean()
 
 
-def train_model(seed: int, train_ds: Dataset, test_ds: Dataset) -> dict:
+def train_model(seed: int, max_n_steps: int | None = None) -> dict:
     device = "cuda"
-    model = VisionModel()
+    model = CNNModel()
     model.to(device)
 
     torch.manual_seed(seed)
-    loader = DataLoader(train_ds, batch_size=64, shuffle=True)
-    val_imgs = test_ds["image"]
-    val_labels = test_ds["label"]
-    optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
+    train_ds, test_ds = load_mnist_train_and_test()
+    batch_isze = 1024
+    loader = DataLoader(
+        train_ds, batch_size=batch_isze, shuffle=True, num_workers=10, pin_memory=True
+    )
+    val_imgs = test_ds["image"].to(device)
+    val_labels = test_ds["label"].to(device)
+    optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
 
     losses_idxs = []
     losses = []
@@ -70,24 +74,28 @@ def train_model(seed: int, train_ds: Dataset, test_ds: Dataset) -> dict:
         loss.backward()
         optimizer.step()
         optimizer.zero_grad()
-        losses.append(loss.item())
+        losses.append(loss.detach())
         losses_idxs.append(i)
-        train_accs.append(mean_accuracy(logits, labels).item())
+        train_accs.append(mean_accuracy(logits, labels).detach())
         train_accs_idxs.append(i)
 
-        if i % 50 == 0 or i == len(loader) - 1:
+        if i % (len(loader) // 10) == 0 or i == len(loader) - 1:
             with torch.no_grad():
-                val_logits = model(val_imgs.to(device))
-                val_acc = mean_accuracy(val_logits, val_labels.to(device))
-                val_accs.append(val_acc.item())
+                val_logits = model(val_imgs)
+                val_acc = mean_accuracy(val_logits, val_labels)
+                val_accs.append(val_acc.detach())
                 val_accs_idxs.append(i)
 
+        if max_n_steps is not None and i >= max_n_steps:
+            print("Stopping training early")
+            break
+
     return {
-        "train_accs": train_accs,
+        "train_accs": [acc.item() for acc in train_accs],
         "train_accs_idxs": train_accs_idxs,
-        "val_accs": val_accs,
+        "val_accs": [acc.item() for acc in val_accs],
         "val_accs_idxs": val_accs_idxs,
-        "train_losses": losses,
+        "train_losses": [loss.item() for loss in losses],
         "train_losses_idxs": losses_idxs,
     }
 
@@ -149,19 +157,18 @@ def plot_loss_and_accuracy(df: pd.DataFrame):
 
 def train_and_save(seed: int):
     print("Starting training for seed: ", seed)
-    train_ds, test_ds = load_mnist_train_and_test()
-    results = train_model(seed, train_ds, test_ds)
+    results = train_model(seed)
     df = joint_df(results)
     print("Final train accuracy: %.4f" % df["train_accs"].iloc[-1])
     print(
         "Final val accuracy: %.4f" % df.query("val_accs.notna()")["val_accs"].iloc[-1]
     )
     df = df.assign(seed=seed)
-    filname = "mnist_results.csv"
+    filname = "data/mnist_results.csv"
     df.to_csv(filname, mode="a", index=False, header=not os.path.exists(filname))
 
 
-def visualize_many_train_and_val_accuracy(df: pd.DataFrame):
+def plot_many_train_and_val_accuracy(df: pd.DataFrame):
     data = df.groupby("step").agg(["mean", "std"])
     data_nonna = data[data["val_accs"]["mean"].notna()]
 
