@@ -45,7 +45,7 @@ def mean_accuracy(logits, labels):
 def train_model(seed: int, max_n_steps: int | None = None) -> dict:
     device = "cuda"
     model = CNNModel()
-    model.to(device)
+    model.to(device, non_blocking=True)
 
     torch.manual_seed(seed)
     train_ds, test_ds = load_mnist_train_and_test()
@@ -53,8 +53,8 @@ def train_model(seed: int, max_n_steps: int | None = None) -> dict:
     loader = DataLoader(
         train_ds, batch_size=batch_isze, shuffle=True, num_workers=10, pin_memory=True
     )
-    val_imgs = test_ds["image"].to(device)
-    val_labels = test_ds["label"].to(device)
+    val_imgs = test_ds["image"].to(device, non_blocking=True)
+    val_labels = test_ds["label"].to(device, non_blocking=True)
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
 
     losses_idxs = []
@@ -67,8 +67,8 @@ def train_model(seed: int, max_n_steps: int | None = None) -> dict:
     val_accs_idxs = []
 
     for i, batch in enumerate(tqdm.tqdm(loader)):
-        images = batch["image"].to(device)
-        labels = batch["label"].to(device)
+        images = batch["image"].to(device, non_blocking=True)
+        labels = batch["label"].to(device, non_blocking=True)
         logits = model(images)
         loss = loss_fn(logits, labels)
         loss.backward()
