@@ -12,7 +12,7 @@ from datasets import load_dataset, Dataset
 to_tensor = ToTensor()
 
 
-class CNNModel(nn.Module):
+class CNNForMnist(nn.Module):
     def __init__(self, img_channels: int, img_size: int, n_classes: int):
         super().__init__()
         self.layers = nn.Sequential(
@@ -31,9 +31,61 @@ class CNNModel(nn.Module):
         return self.layers(x)
 
 
+class CNNForCifar100(nn.Module):
+    """Architeture by Perplexity AI."""
+
+    def __init__(self, img_channels: int, img_size: int, n_classes: int):
+        super().__init__()
+        self.features = nn.Sequential(
+            # First convolutional block
+            nn.Conv2d(img_channels, img_size, kernel_size=3, padding=1),
+            nn.BatchNorm2d(img_size),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(img_size, img_size, kernel_size=3, padding=1),
+            nn.BatchNorm2d(img_size),
+            nn.ReLU(inplace=True),
+            nn.MaxPool2d(kernel_size=2, stride=2),
+            nn.Dropout(0.2),
+            #
+            # Second convolutional block
+            nn.Conv2d(img_size, 64, kernel_size=3, padding=1),
+            nn.BatchNorm2d(64),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(64, 64, kernel_size=3, padding=1),
+            nn.BatchNorm2d(64),
+            nn.ReLU(inplace=True),
+            nn.MaxPool2d(kernel_size=2, stride=2),
+            nn.Dropout(0.3),
+            #
+            # Third convolutional block
+            nn.Conv2d(64, 128, kernel_size=3, padding=1),
+            nn.BatchNorm2d(128),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(128, 128, kernel_size=3, padding=1),
+            nn.BatchNorm2d(128),
+            nn.ReLU(inplace=True),
+            nn.MaxPool2d(kernel_size=2, stride=2),
+            nn.Dropout(0.4),
+        )
+
+        self.classifier = nn.Sequential(
+            nn.Flatten(),
+            nn.Linear(128 * 4 * 4, 128),
+            nn.BatchNorm1d(128),
+            nn.ReLU(inplace=True),
+            nn.Dropout(0.5),
+            nn.Linear(128, n_classes),
+        )
+
+    def forward(self, x):
+        x = self.features(x)
+        x = self.classifier(x)
+        return x
+
+
 def loss_fn(logits, labels):
-    # logits: (N, 10)
-    # labels: (N, 1)
+    # logits: (B, n_classes)
+    # labels: (B, 1)
     return nn.functional.cross_entropy(logits, labels)
 
 
@@ -43,22 +95,30 @@ def mean_accuracy(logits, labels):
 
 def train_model(seed: int, dataset: str, max_n_steps: int | None = None) -> dict:
     torch.manual_seed(seed)
+    device = "cuda"
+
     if dataset == "mnist":
         train_ds, test_ds, img_channels, img_size, n_classes = (
             load_mnist_train_and_test()
         )
+        model = CNNForMnist(
+            img_channels=img_channels, img_size=img_size, n_classes=n_classes
+        )
+        n_epochs = 1
     elif dataset == "cifar100":
         train_ds, test_ds, img_channels, img_size, n_classes = (
             load_cifar100_train_and_test()
         )
+        model = CNNForCifar100(
+            img_channels=img_channels, img_size=img_size, n_classes=n_classes
+        )
+        n_epochs = 100
     else:
         raise ValueError(f"Unknown dataset: {dataset}")
 
-    device = "cuda"
-    model = CNNModel(img_channels=img_channels, img_size=img_size, n_classes=n_classes)
     model.to(device, non_blocking=True)
 
-    batch_size = 1024
+    batch_size = 256
     loader = DataLoader(
         train_ds, batch_size=batch_size, shuffle=True, num_workers=10, pin_memory=True
     )
@@ -75,29 +135,31 @@ def train_model(seed: int, dataset: str, max_n_steps: int | None = None) -> dict
     val_accs = []
     val_accs_idxs = []
 
-    for i, batch in enumerate(tqdm.tqdm(loader)):
-        images = batch["image"].to(device, non_blocking=True)
-        labels = batch["label"].to(device, non_blocking=True)
-        logits = model(images)
-        loss = loss_fn(logits, labels)
-        loss.backward()
-        optimizer.step()
-        optimizer.zero_grad()
-        losses.append(loss.detach())
-        losses_idxs.append(i)
-        train_accs.append(mean_accuracy(logits, labels).detach())
-        train_accs_idxs.append(i)
+    for epoch in range(n_epochs):
+        for i, batch in enumerate(tqdm.tqdm(loader)):
+            step = i + epoch * len(loader)
+            images = batch["image"].to(device, non_blocking=True)
+            labels = batch["label"].to(device, non_blocking=True)
+            logits = model(images)
+            loss = loss_fn(logits, labels)
+            loss.backward()
+            optimizer.step()
+            optimizer.zero_grad()
+            losses.append(loss.detach())
+            losses_idxs.append(step)
+            train_accs.append(mean_accuracy(logits, labels).detach())
+            train_accs_idxs.append(step)
 
-        if i % (len(loader) // 10) == 0 or i == len(loader) - 1:
-            with torch.no_grad():
-                val_logits = model(val_imgs)
-                val_acc = mean_accuracy(val_logits, val_labels)
-                val_accs.append(val_acc.detach())
-                val_accs_idxs.append(i)
+            if i % (len(loader) // 10) == 0 or i == len(loader) - 1:
+                with torch.no_grad():
+                    val_logits = model(val_imgs)
+                    val_acc = mean_accuracy(val_logits, val_labels)
+                    val_accs.append(val_acc.detach())
+                    val_accs_idxs.append(step)
 
-        if max_n_steps is not None and i >= max_n_steps:
-            print("Stopping training early")
-            break
+            if max_n_steps is not None and i >= max_n_steps:
+                print("Stopping training early")
+                break
 
     return {
         "train_accs": [acc.item() for acc in train_accs],
