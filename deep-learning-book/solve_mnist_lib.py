@@ -11,20 +11,19 @@ from datasets import load_dataset, Dataset
 
 to_tensor = ToTensor()
 
-img_size = 28
-
 
 class CNNModel(nn.Module):
-    def __init__(self):
+    def __init__(self, img_channels: int, img_size: int, n_classes: int):
         super().__init__()
         self.layers = nn.Sequential(
-            nn.Conv2d(in_channels=1, out_channels=64, kernel_size=3),
+            nn.Conv2d(in_channels=img_channels, out_channels=64, kernel_size=3),
             nn.GELU(),
             nn.Conv2d(in_channels=64, out_channels=64, kernel_size=3),
             nn.GELU(),
             nn.Flatten(),
             nn.Linear(
-                in_features=64 * (img_size - 4) * (img_size - 4), out_features=10
+                in_features=64 * (img_size - 4) * (img_size - 4),
+                out_features=n_classes,
             ),
         )
 
@@ -42,16 +41,26 @@ def mean_accuracy(logits, labels):
     return (logits.argmax(dim=1) == labels).float().mean()
 
 
-def train_model(seed: int, max_n_steps: int | None = None) -> dict:
+def train_model(seed: int, dataset: str, max_n_steps: int | None = None) -> dict:
+    torch.manual_seed(seed)
+    if dataset == "mnist":
+        train_ds, test_ds, img_channels, img_size, n_classes = (
+            load_mnist_train_and_test()
+        )
+    elif dataset == "cifar100":
+        train_ds, test_ds, img_channels, img_size, n_classes = (
+            load_cifar100_train_and_test()
+        )
+    else:
+        raise ValueError(f"Unknown dataset: {dataset}")
+
     device = "cuda"
-    model = CNNModel()
+    model = CNNModel(img_channels=img_channels, img_size=img_size, n_classes=n_classes)
     model.to(device, non_blocking=True)
 
-    torch.manual_seed(seed)
-    train_ds, test_ds = load_mnist_train_and_test()
-    batch_isze = 1024
+    batch_size = 1024
     loader = DataLoader(
-        train_ds, batch_size=batch_isze, shuffle=True, num_workers=10, pin_memory=True
+        train_ds, batch_size=batch_size, shuffle=True, num_workers=10, pin_memory=True
     )
     val_imgs = test_ds["image"].to(device, non_blocking=True)
     val_labels = test_ds["label"].to(device, non_blocking=True)
@@ -100,17 +109,32 @@ def train_model(seed: int, max_n_steps: int | None = None) -> dict:
     }
 
 
-def load_mnist_train_and_test() -> tuple[Dataset, Dataset]:
+def load_mnist_train_and_test() -> tuple[Dataset, Dataset, int, int, int]:
+    print("Loading MNIST")
     ds = load_dataset("mnist")
     train_ds = ds["train"].with_transform(transform=transform)
     test_ds = ds["test"].with_transform(transform=transform)
-    return train_ds, test_ds
+    img_channels = 1
+    img_size = 28
+    n_classes = 10
+    return train_ds, test_ds, img_channels, img_size, n_classes
+
+
+def load_cifar100_train_and_test() -> tuple[Dataset, Dataset, int, int, int]:
+    print("Loading CIFAR100")
+    ds = load_dataset("uoft-cs/cifar100")
+    new_names = {"img": "image", "fine_label": "label"}
+    train_ds = ds["train"].rename_columns(new_names).with_transform(transform=transform)
+    test_ds = ds["test"].rename_columns(new_names).with_transform(transform=transform)
+    img_channels = 3
+    img_size = 32
+    n_classes = 100
+    return train_ds, test_ds, img_channels, img_size, n_classes
 
 
 def transform(d: dict[str, Any]) -> dict[str, Any]:
     if "image" in d:
-        d["image"] = torch.cat([to_tensor(img) for img in d["image"]])  # (N, W, H)
-        d["image"] = d["image"][:, None, :, :]  # (N, 1, W, H)
+        d["image"] = torch.stack([to_tensor(img) for img in d["image"]])  # (B, C, W, H)
     if "label" in d:
         d["label"] = torch.tensor(d["label"])
     return d
@@ -155,17 +179,17 @@ def plot_loss_and_accuracy(df: pd.DataFrame):
     plt.show()
 
 
-def train_and_save(seed: int):
+def train_and_save(seed: int, dataset: str):
     print("Starting training for seed: ", seed)
-    results = train_model(seed)
+    results = train_model(seed, dataset=dataset)
     df = joint_df(results)
     print("Final train accuracy: %.4f" % df["train_accs"].iloc[-1])
     print(
         "Final val accuracy: %.4f" % df.query("val_accs.notna()")["val_accs"].iloc[-1]
     )
     df = df.assign(seed=seed)
-    filname = "data/mnist_results.csv"
-    df.to_csv(filname, mode="a", index=False, header=not os.path.exists(filname))
+    filename = f"data/{dataset}_results.csv"
+    df.to_csv(filename, mode="a", index=False, header=not os.path.exists(filename))
 
 
 def plot_many_train_and_val_accuracy(df: pd.DataFrame):
