@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 import os
 import matplotlib.pyplot as plt
 import pandas as pd
@@ -31,50 +32,58 @@ class CNNForMnist(nn.Module):
         return self.layers(x)
 
 
-class CNNForCifar100(nn.Module):
-    """Architeture by Perplexity AI."""
-
+class ImprovedCNNForCifar100(nn.Module):
     def __init__(self, img_channels: int, img_size: int, n_classes: int):
         super().__init__()
+
         self.features = nn.Sequential(
-            # First convolutional block
-            nn.Conv2d(img_channels, img_size, kernel_size=3, padding=1),
-            nn.BatchNorm2d(img_size),
-            nn.ReLU(inplace=True),
-            nn.Conv2d(img_size, img_size, kernel_size=3, padding=1),
-            nn.BatchNorm2d(img_size),
-            nn.ReLU(inplace=True),
-            nn.MaxPool2d(kernel_size=2, stride=2),
-            nn.Dropout(0.2),
-            #
-            # Second convolutional block
-            nn.Conv2d(img_size, 64, kernel_size=3, padding=1),
+            # First block
+            nn.Conv2d(img_channels, 64, kernel_size=3, padding=1),
             nn.BatchNorm2d(64),
-            nn.ReLU(inplace=True),
+            nn.LeakyReLU(inplace=True),
             nn.Conv2d(64, 64, kernel_size=3, padding=1),
             nn.BatchNorm2d(64),
-            nn.ReLU(inplace=True),
+            nn.LeakyReLU(inplace=True),
             nn.MaxPool2d(kernel_size=2, stride=2),
-            nn.Dropout(0.3),
-            #
-            # Third convolutional block
+            nn.Dropout(0.2),
+            # Second block
             nn.Conv2d(64, 128, kernel_size=3, padding=1),
             nn.BatchNorm2d(128),
-            nn.ReLU(inplace=True),
+            nn.LeakyReLU(inplace=True),
             nn.Conv2d(128, 128, kernel_size=3, padding=1),
             nn.BatchNorm2d(128),
-            nn.ReLU(inplace=True),
+            nn.LeakyReLU(inplace=True),
+            nn.MaxPool2d(kernel_size=2, stride=2),
+            nn.Dropout(0.3),
+            # Third block
+            nn.Conv2d(128, 256, kernel_size=3, padding=1),
+            nn.BatchNorm2d(256),
+            nn.LeakyReLU(inplace=True),
+            nn.Conv2d(256, 256, kernel_size=3, padding=1),
+            nn.BatchNorm2d(256),
+            nn.LeakyReLU(inplace=True),
             nn.MaxPool2d(kernel_size=2, stride=2),
             nn.Dropout(0.4),
+            # Fourth block
+            nn.Conv2d(256, 512, kernel_size=3, padding=1),
+            nn.BatchNorm2d(512),
+            nn.LeakyReLU(inplace=True),
+            nn.Conv2d(512, 512, kernel_size=3, padding=1),
+            nn.BatchNorm2d(512),
+            nn.LeakyReLU(inplace=True),
+            nn.MaxPool2d(kernel_size=2, stride=2),
+            nn.Dropout(0.4),
+            # Global Average Pooling
+            nn.AdaptiveAvgPool2d((1, 1)),
         )
 
         self.classifier = nn.Sequential(
             nn.Flatten(),
-            nn.Linear(128 * 4 * 4, 128),
-            nn.BatchNorm1d(128),
-            nn.ReLU(inplace=True),
+            nn.Linear(512, 1024),
+            nn.BatchNorm1d(1024),
+            nn.LeakyReLU(inplace=True),
             nn.Dropout(0.5),
-            nn.Linear(128, n_classes),
+            nn.Linear(1024, n_classes),
         )
 
     def forward(self, x):
@@ -93,10 +102,16 @@ def mean_accuracy(logits, labels):
     return (logits.argmax(dim=1) == labels).float().mean()
 
 
-def train_model(seed: int, dataset: str, max_n_steps: int | None = None) -> dict:
-    torch.manual_seed(seed)
-    device = "cuda"
+@dataclass
+class TrainConfig:
+    dataset: str
+    train_ds: Dataset
+    test_ds: Dataset
+    model: nn.Module
+    n_epochs: int
 
+
+def get_train_conf(dataset: str) -> TrainConfig:
     if dataset == "mnist":
         train_ds, test_ds, img_channels, img_size, n_classes = (
             load_mnist_train_and_test()
@@ -105,16 +120,30 @@ def train_model(seed: int, dataset: str, max_n_steps: int | None = None) -> dict
             img_channels=img_channels, img_size=img_size, n_classes=n_classes
         )
         n_epochs = 1
-    elif dataset == "cifar100":
+        return TrainConfig(dataset, train_ds, test_ds, model, n_epochs)
+
+    if dataset == "cifar100":
         train_ds, test_ds, img_channels, img_size, n_classes = (
             load_cifar100_train_and_test()
         )
-        model = CNNForCifar100(
+        model = ImprovedCNNForCifar100(
             img_channels=img_channels, img_size=img_size, n_classes=n_classes
         )
-        n_epochs = 100
-    else:
-        raise ValueError(f"Unknown dataset: {dataset}")
+        n_epochs = 20
+        return TrainConfig(dataset, train_ds, test_ds, model, n_epochs)
+
+    raise ValueError(f"Unknown dataset: {dataset}")
+
+
+def train_model(seed: int, conf: TrainConfig, max_n_steps: int | None = None) -> dict:
+    print("Training model...")
+    torch.manual_seed(seed)
+    device = "cuda"
+
+    model = conf.model
+    train_ds = conf.train_ds
+    test_ds = conf.test_ds
+    n_epochs = conf.n_epochs
 
     model.to(device, non_blocking=True)
 
@@ -124,7 +153,8 @@ def train_model(seed: int, dataset: str, max_n_steps: int | None = None) -> dict
     )
     val_imgs = test_ds["image"].to(device, non_blocking=True)
     val_labels = test_ds["label"].to(device, non_blocking=True)
-    optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
+    weight_decay = 5e-4  # claude suggestion
+    optimizer = torch.optim.Adam(model.parameters(), lr=1e-3, weight_decay=weight_decay)
 
     losses_idxs = []
     losses = []
@@ -150,7 +180,7 @@ def train_model(seed: int, dataset: str, max_n_steps: int | None = None) -> dict
             train_accs.append(mean_accuracy(logits, labels).detach())
             train_accs_idxs.append(step)
 
-            if i % (len(loader) // 10) == 0 or i == len(loader) - 1:
+            if i % (len(loader) // 5) == 0 or i == len(loader) - 1:
                 with torch.no_grad():
                     val_logits = model(val_imgs)
                     val_acc = mean_accuracy(val_logits, val_labels)
@@ -159,7 +189,7 @@ def train_model(seed: int, dataset: str, max_n_steps: int | None = None) -> dict
 
             if max_n_steps is not None and i >= max_n_steps:
                 print("Stopping training early")
-                break
+                return
 
     return {
         "train_accs": [acc.item() for acc in train_accs],
@@ -228,29 +258,29 @@ def joint_df(results: dict) -> pd.DataFrame:
     return df
 
 
-def plot_loss_and_accuracy(df: pd.DataFrame):
+def plot_loss_and_accuracy(df: pd.DataFrame, alpha: float = 0.5):
     # plot train loss and train/val accuracy side by side
     plt.figure(figsize=(10, 3))
     plt.subplot(1, 2, 1)
-    plt.scatter(df["step"], df["train_losses"], label="train loss", alpha=0.5)
+    plt.scatter(df["step"], df["train_losses"], label="train loss", alpha=alpha)
     plt.legend()
     plt.subplot(1, 2, 2)
-    plt.scatter(df["step"], df["train_accs"], label="train accuracy", alpha=0.5)
+    plt.scatter(df["step"], df["train_accs"], label="train accuracy", alpha=alpha)
     plt.scatter(df["step"], df["val_accs"], label="val accuracy")
     plt.legend()
     plt.show()
 
 
-def train_and_save(seed: int, dataset: str):
+def train_and_save(seed: int, conf: TrainConfig):
     print("Starting training for seed: ", seed)
-    results = train_model(seed, dataset=dataset)
+    results = train_model(seed, conf)
     df = joint_df(results)
     print("Final train accuracy: %.4f" % df["train_accs"].iloc[-1])
     print(
         "Final val accuracy: %.4f" % df.query("val_accs.notna()")["val_accs"].iloc[-1]
     )
     df = df.assign(seed=seed)
-    filename = f"data/{dataset}_results.csv"
+    filename = f"data/{conf.dataset}_results.csv"
     df.to_csv(filename, mode="a", index=False, header=not os.path.exists(filename))
 
 
