@@ -7,8 +7,9 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
 import tqdm
-from torchvision.transforms import ToTensor
+from torchvision.transforms import ToTensor, transforms
 from datasets import load_dataset, Dataset
+from torch.optim.lr_scheduler import ReduceLROnPlateau
 
 to_tensor = ToTensor()
 
@@ -95,6 +96,7 @@ class ImprovedCNNForCifar100(nn.Module):
 def loss_fn(logits, labels):
     # logits: (B, n_classes)
     # labels: (B, 1)
+    # output: (1,)
     return nn.functional.cross_entropy(logits, labels)
 
 
@@ -119,7 +121,7 @@ def get_train_conf(dataset: str) -> TrainConfig:
         model = CNNForMnist(
             img_channels=img_channels, img_size=img_size, n_classes=n_classes
         )
-        n_epochs = 1
+        n_epochs = 2
         return TrainConfig(dataset, train_ds, test_ds, model, n_epochs)
 
     if dataset == "cifar100":
@@ -155,6 +157,9 @@ def train_model(seed: int, conf: TrainConfig, max_n_steps: int | None = None) ->
     val_labels = test_ds["label"].to(device, non_blocking=True)
     weight_decay = 5e-4  # claude suggestion
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-3, weight_decay=weight_decay)
+    scheduler = ReduceLROnPlateau(
+        optimizer, "min", patience=5, factor=0.5, verbose=True
+    )
 
     losses_idxs = []
     losses = []
@@ -180,12 +185,12 @@ def train_model(seed: int, conf: TrainConfig, max_n_steps: int | None = None) ->
             train_accs.append(mean_accuracy(logits, labels).detach())
             train_accs_idxs.append(step)
 
-            if i % (len(loader) // 5) == 0 or i == len(loader) - 1:
-                with torch.no_grad():
-                    val_logits = model(val_imgs)
-                    val_acc = mean_accuracy(val_logits, val_labels)
-                    val_accs.append(val_acc.detach())
-                    val_accs_idxs.append(step)
+            is_endof_epoch = i == len(loader) - 1
+            if is_endof_epoch:
+                val_acc, val_loss = evaluate(model, val_imgs, val_labels)
+                val_accs.append(val_acc.detach())
+                val_accs_idxs.append(step)
+                scheduler.step(val_loss)
 
             if max_n_steps is not None and i >= max_n_steps:
                 print("Stopping training early")
@@ -201,11 +206,19 @@ def train_model(seed: int, conf: TrainConfig, max_n_steps: int | None = None) ->
     }
 
 
+def evaluate(model, val_imgs, val_labels):
+    with torch.inference_mode():
+        val_logits = model(val_imgs)
+        val_acc = mean_accuracy(val_logits, val_labels)
+        val_loss = loss_fn(val_logits, val_labels)
+        return val_acc, val_loss
+
+
 def load_mnist_train_and_test() -> tuple[Dataset, Dataset, int, int, int]:
     print("Loading MNIST")
     ds = load_dataset("mnist")
-    train_ds = ds["train"].with_transform(transform=transform)
-    test_ds = ds["test"].with_transform(transform=transform)
+    train_ds = ds["train"].with_transform(transform=mnist_ds_preprocess)
+    test_ds = ds["test"].with_transform(transform=mnist_ds_preprocess)
     img_channels = 1
     img_size = 28
     n_classes = 10
@@ -216,15 +229,47 @@ def load_cifar100_train_and_test() -> tuple[Dataset, Dataset, int, int, int]:
     print("Loading CIFAR100")
     ds = load_dataset("uoft-cs/cifar100")
     new_names = {"img": "image", "fine_label": "label"}
-    train_ds = ds["train"].rename_columns(new_names).with_transform(transform=transform)
-    test_ds = ds["test"].rename_columns(new_names).with_transform(transform=transform)
+    train_ds = (
+        ds["train"]
+        .rename_columns(new_names)
+        .with_transform(transform=cifar100_ds_preprocess)
+    )
+    test_ds = (
+        ds["test"]
+        .rename_columns(new_names)
+        .with_transform(transform=cifar100_ds_preprocess)
+    )
     img_channels = 3
     img_size = 32
     n_classes = 100
     return train_ds, test_ds, img_channels, img_size, n_classes
 
 
-def transform(d: dict[str, Any]) -> dict[str, Any]:
+cifar100_transforms = transforms.Compose(
+    [
+        transforms.RandomCrop(32, padding=4),
+        transforms.RandomHorizontalFlip(),
+        transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1),
+        transforms.RandomRotation(15),
+        transforms.ToTensor(),
+        transforms.Normalize(
+            (0.5071, 0.4867, 0.4408), (0.2675, 0.2565, 0.2761)
+        ),  # CIFAR-100 specific
+    ]
+)
+
+
+def cifar100_ds_preprocess(d: dict[str, Any]) -> dict[str, Any]:
+    if "image" in d:
+        d["image"] = torch.stack(
+            [cifar100_transforms(img) for img in d["image"]]
+        )  # (B, C, W, H)
+    if "label" in d:
+        d["label"] = torch.tensor(d["label"])
+    return d
+
+
+def mnist_ds_preprocess(d: dict[str, Any]) -> dict[str, Any]:
     if "image" in d:
         d["image"] = torch.stack([to_tensor(img) for img in d["image"]])  # (B, C, W, H)
     if "label" in d:
