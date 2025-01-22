@@ -1,3 +1,4 @@
-from solve_mnist_lib import train_and_save
+from solve_mnist_lib import get_train_conf, train_and_save
 
-train_and_save(seed=0, dataset="cifar100")
+conf = get_train_conf("cifar100")
+train_and_save(seed=0, conf=conf)

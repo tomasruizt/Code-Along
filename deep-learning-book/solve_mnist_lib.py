@@ -11,6 +11,8 @@ from torchvision.transforms import ToTensor, transforms
 from datasets import load_dataset, Dataset
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 
+torch.set_float32_matmul_precision("high")
+
 to_tensor = ToTensor()
 
 
@@ -131,14 +133,15 @@ def get_train_conf(dataset: str) -> TrainConfig:
         model = ImprovedCNNForCifar100(
             img_channels=img_channels, img_size=img_size, n_classes=n_classes
         )
-        n_epochs = 20
+        model = torch.compile(model)
+        n_epochs = 50
         return TrainConfig(dataset, train_ds, test_ds, model, n_epochs)
 
     raise ValueError(f"Unknown dataset: {dataset}")
 
 
 def train_model(seed: int, conf: TrainConfig, max_n_steps: int | None = None) -> dict:
-    print("Training model...")
+    print("Starting training for seed: %d" % seed)
     torch.manual_seed(seed)
     device = "cuda"
 
@@ -185,16 +188,15 @@ def train_model(seed: int, conf: TrainConfig, max_n_steps: int | None = None) ->
             train_accs.append(mean_accuracy(logits, labels).detach())
             train_accs_idxs.append(step)
 
-            is_endof_epoch = i == len(loader) - 1
-            if is_endof_epoch:
-                val_acc, val_loss = evaluate(model, val_imgs, val_labels)
-                val_accs.append(val_acc.detach())
-                val_accs_idxs.append(step)
-                scheduler.step(val_loss)
-
             if max_n_steps is not None and i >= max_n_steps:
                 print("Stopping training early")
                 return
+
+        print("Evaluating model")
+        val_acc, val_loss = evaluate(model, val_imgs, val_labels)
+        val_accs.append(val_acc.detach())
+        val_accs_idxs.append(step)
+        scheduler.step(val_loss)
 
     return {
         "train_accs": [acc.item() for acc in train_accs],
@@ -217,8 +219,8 @@ def evaluate(model, val_imgs, val_labels):
 def load_mnist_train_and_test() -> tuple[Dataset, Dataset, int, int, int]:
     print("Loading MNIST")
     ds = load_dataset("mnist")
-    train_ds = ds["train"].with_transform(transform=mnist_ds_preprocess)
-    test_ds = ds["test"].with_transform(transform=mnist_ds_preprocess)
+    train_ds = ds["train"].with_transform(transform=vanilla_transform)
+    test_ds = ds["test"].with_transform(transform=vanilla_transform)
     img_channels = 1
     img_size = 28
     n_classes = 10
@@ -232,12 +234,10 @@ def load_cifar100_train_and_test() -> tuple[Dataset, Dataset, int, int, int]:
     train_ds = (
         ds["train"]
         .rename_columns(new_names)
-        .with_transform(transform=cifar100_ds_preprocess)
+        .with_transform(transform=data_augmentation_transform)
     )
     test_ds = (
-        ds["test"]
-        .rename_columns(new_names)
-        .with_transform(transform=cifar100_ds_preprocess)
+        ds["test"].rename_columns(new_names).with_transform(transform=vanilla_transform)
     )
     img_channels = 3
     img_size = 32
@@ -245,7 +245,7 @@ def load_cifar100_train_and_test() -> tuple[Dataset, Dataset, int, int, int]:
     return train_ds, test_ds, img_channels, img_size, n_classes
 
 
-cifar100_transforms = transforms.Compose(
+data_augmentation = transforms.Compose(
     [
         transforms.RandomCrop(32, padding=4),
         transforms.RandomHorizontalFlip(),
@@ -259,17 +259,17 @@ cifar100_transforms = transforms.Compose(
 )
 
 
-def cifar100_ds_preprocess(d: dict[str, Any]) -> dict[str, Any]:
+def data_augmentation_transform(d: dict[str, Any]) -> dict[str, Any]:
     if "image" in d:
         d["image"] = torch.stack(
-            [cifar100_transforms(img) for img in d["image"]]
+            [data_augmentation(img) for img in d["image"]]
         )  # (B, C, W, H)
     if "label" in d:
         d["label"] = torch.tensor(d["label"])
     return d
 
 
-def mnist_ds_preprocess(d: dict[str, Any]) -> dict[str, Any]:
+def vanilla_transform(d: dict[str, Any]) -> dict[str, Any]:
     if "image" in d:
         d["image"] = torch.stack([to_tensor(img) for img in d["image"]])  # (B, C, W, H)
     if "label" in d:
@@ -317,7 +317,6 @@ def plot_loss_and_accuracy(df: pd.DataFrame, alpha: float = 0.5):
 
 
 def train_and_save(seed: int, conf: TrainConfig):
-    print("Starting training for seed: ", seed)
     results = train_model(seed, conf)
     df = joint_df(results)
     print("Final train accuracy: %.4f" % df["train_accs"].iloc[-1])
