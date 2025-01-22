@@ -38,51 +38,51 @@ class CNNForMnist(nn.Module):
 class ImprovedCNNForCifar100(nn.Module):
     def __init__(self, img_channels: int, img_size: int, n_classes: int):
         super().__init__()
+        
+        def conv_block(in_channels, out_channels, dropout=0.0):
+            return nn.Sequential(
+                nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1, bias=False),
+                nn.BatchNorm2d(out_channels),
+                nn.LeakyReLU(inplace=True),
+                nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1, bias=False),
+                nn.BatchNorm2d(out_channels),
+                nn.LeakyReLU(inplace=True),
+                nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1, bias=False),
+                nn.BatchNorm2d(out_channels),
+                nn.LeakyReLU(inplace=True),
+                nn.MaxPool2d(kernel_size=2, stride=2),
+                nn.Dropout(dropout),
+            )
 
-        self.features = nn.Sequential(
-            # First block
-            nn.Conv2d(img_channels, 64, kernel_size=3, padding=1),
+        # Initial convolution
+        self.initial = nn.Sequential(
+            nn.Conv2d(img_channels, 64, kernel_size=3, padding=1, bias=False),
             nn.BatchNorm2d(64),
             nn.LeakyReLU(inplace=True),
-            nn.Conv2d(64, 64, kernel_size=3, padding=1),
-            nn.BatchNorm2d(64),
-            nn.LeakyReLU(inplace=True),
-            nn.MaxPool2d(kernel_size=2, stride=2),
-            nn.Dropout(0.2),
-            # Second block
-            nn.Conv2d(64, 128, kernel_size=3, padding=1),
-            nn.BatchNorm2d(128),
-            nn.LeakyReLU(inplace=True),
-            nn.Conv2d(128, 128, kernel_size=3, padding=1),
-            nn.BatchNorm2d(128),
-            nn.LeakyReLU(inplace=True),
-            nn.MaxPool2d(kernel_size=2, stride=2),
-            nn.Dropout(0.3),
-            # Third block
-            nn.Conv2d(128, 256, kernel_size=3, padding=1),
-            nn.BatchNorm2d(256),
-            nn.LeakyReLU(inplace=True),
-            nn.Conv2d(256, 256, kernel_size=3, padding=1),
-            nn.BatchNorm2d(256),
-            nn.LeakyReLU(inplace=True),
-            nn.MaxPool2d(kernel_size=2, stride=2),
-            nn.Dropout(0.4),
-            # Fourth block
-            nn.Conv2d(256, 512, kernel_size=3, padding=1),
-            nn.BatchNorm2d(512),
-            nn.LeakyReLU(inplace=True),
-            nn.Conv2d(512, 512, kernel_size=3, padding=1),
-            nn.BatchNorm2d(512),
-            nn.LeakyReLU(inplace=True),
-            nn.MaxPool2d(kernel_size=2, stride=2),
-            nn.Dropout(0.4),
-            # Global Average Pooling
-            nn.AdaptiveAvgPool2d((1, 1)),
         )
 
+        # Main blocks with residual connections
+        self.block1 = conv_block(64, 128, dropout=0.2)
+        self.block2 = conv_block(128, 256, dropout=0.3)
+        self.block3 = conv_block(256, 512, dropout=0.4)
+        self.block4 = conv_block(512, 1024, dropout=0.4)
+
+        # Residual connections
+        self.res1 = nn.Conv2d(64, 128, kernel_size=1)
+        self.res2 = nn.Conv2d(128, 256, kernel_size=1)
+        self.res3 = nn.Conv2d(256, 512, kernel_size=1)
+        self.res4 = nn.Conv2d(512, 1024, kernel_size=1)
+
+        self.pool = nn.AdaptiveAvgPool2d((1, 1))
+
+        # Enhanced classifier (keeping bias for linear layers)
         self.classifier = nn.Sequential(
             nn.Flatten(),
-            nn.Linear(512, 1024),
+            nn.Linear(1024, 2048),
+            nn.BatchNorm1d(2048),
+            nn.LeakyReLU(inplace=True),
+            nn.Dropout(0.5),
+            nn.Linear(2048, 1024),
             nn.BatchNorm1d(1024),
             nn.LeakyReLU(inplace=True),
             nn.Dropout(0.5),
@@ -90,7 +90,30 @@ class ImprovedCNNForCifar100(nn.Module):
         )
 
     def forward(self, x):
-        x = self.features(x)
+        # Initial convolution
+        x = self.initial(x)
+
+        # Block 1 with residual
+        identity = self.res1(nn.functional.avg_pool2d(x, 2))
+        x = self.block1(x)
+        x = x + identity
+
+        # Block 2 with residual
+        identity = self.res2(nn.functional.avg_pool2d(x, 2))
+        x = self.block2(x)
+        x = x + identity
+
+        # Block 3 with residual
+        identity = self.res3(nn.functional.avg_pool2d(x, 2))
+        x = self.block3(x)
+        x = x + identity
+
+        # Block 4 with residual
+        identity = self.res4(nn.functional.avg_pool2d(x, 2))
+        x = self.block4(x)
+        x = x + identity
+
+        x = self.pool(x)
         x = self.classifier(x)
         return x
 
@@ -192,7 +215,7 @@ def train_model(seed: int, conf: TrainConfig, max_n_steps: int | None = None) ->
                 print("Stopping training early")
                 return
 
-        print("Evaluating model")
+        print("Finished epoch %d, evaluating model" % (epoch + 1))
         val_acc, val_loss = evaluate(model, val_imgs, val_labels)
         val_accs.append(val_acc.detach())
         val_accs_idxs.append(step)
@@ -208,12 +231,12 @@ def train_model(seed: int, conf: TrainConfig, max_n_steps: int | None = None) ->
     }
 
 
+@torch.inference_mode()
 def evaluate(model, val_imgs, val_labels):
-    with torch.inference_mode():
-        val_logits = model(val_imgs)
-        val_acc = mean_accuracy(val_logits, val_labels)
-        val_loss = loss_fn(val_logits, val_labels)
-        return val_acc, val_loss
+    val_logits = model(val_imgs)
+    val_acc = mean_accuracy(val_logits, val_labels)
+    val_loss = loss_fn(val_logits, val_labels)
+    return val_acc, val_loss
 
 
 def load_mnist_train_and_test() -> tuple[Dataset, Dataset, int, int, int]:
