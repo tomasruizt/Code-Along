@@ -1,5 +1,5 @@
 NVCC = nvcc
-CFLAGS = -g
+CFLAGS = -g -G -lineinfo
 LIBS = -larmadillo
 
 OBJECTS = matmul.o
@@ -24,6 +24,12 @@ profile: program1
 
 profile2: program2
 	ncu --set full ./program2 > profile2.txt
+
+nsight_profile2: program2
+	nsys profile -o profiles/program2 ./program2
+
+ncu_profile2: program2
+	ncu --set full --kernel-name matrix_mult --launch-skip 0 --launch-count 1 -o profiles/matrix_mult ./program2
 
 clean:
 	rm -f program1 program2 $(OBJECTS)

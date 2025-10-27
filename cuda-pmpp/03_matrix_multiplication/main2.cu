@@ -9,7 +9,7 @@ void init_random_matrix(float* matrix, int size) {
 }
 
 int main() {
-    const int n = 1024*4;  // Single dimension for square matrices
+    const int n = 1024;  // Single dimension for square matrices
     
     printf("Matrix dimensions: %d\n", n);
     
