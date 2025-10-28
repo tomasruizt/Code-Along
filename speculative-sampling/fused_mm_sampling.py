@@ -4,6 +4,8 @@
 import torch
 import triton
 import triton.language as tl
+import helion
+import helion.language as hl
 
 
 def sample(
@@ -46,8 +48,8 @@ def incremental_sample_pt(
         new_max_idx_global = idx_from + new_max_idx_local
 
         replace_mask = new_max > gumbel_max
-        gumbel_max[replace_mask] = new_max[replace_mask]
-        gumbel_max_idx[replace_mask] = new_max_idx_global[replace_mask]
+        gumbel_max = torch.where(replace_mask, new_max, gumbel_max)
+        gumbel_max_idx = torch.where(replace_mask, new_max_idx_global, gumbel_max_idx)
     return gumbel_max_idx.T
 
 
@@ -180,3 +182,47 @@ def fused_sample_triton_kernel(
         gumbel_max_idx_global,
         mask=out_mask,
     )
+
+
+@helion.kernel(autotune_effort="none")
+def matmul(weights: torch.Tensor, hidden_states: torch.Tensor) -> torch.Tensor:
+    """
+    Currently, the torch.rand() call fails, because it does not resolve the
+    symbolic dimensions correctly. I reported the bug here:
+    https://github.com/pytorch/helion/issues/1041
+    """
+    assert weights.size(1) == hidden_states.size(0)
+    V, D = weights.size()
+    seq_len = hidden_states.size(1)
+    hl_seq_len = hl.specialize(seq_len)
+
+    num_samples = 2
+    gumbel_max = float("-inf") * torch.ones(
+        size=(num_samples, seq_len), device=weights.device
+    )
+    gumbel_max_idx = torch.empty(
+        size=(num_samples, seq_len), dtype=torch.long, device=weights.device
+    )
+
+    for tile_v in hl.tile(V):
+        logits_blk = hl.zeros([tile_v, hl_seq_len], dtype=torch.float32)
+        for tile_d in hl.tile(D):
+            mm = torch.matmul(weights[tile_v, tile_d], hidden_states[tile_d, :])
+            logits_blk = logits_blk + mm
+        unif_noise = torch.rand(
+            [num_samples, tile_v.block_size, hl_seq_len], dtype=torch.float32
+        )
+        gumbel_noise = -(-unif_noise.log()).log()
+        # [num_samples, seq_len]
+        summed = logits_blk + gumbel_noise
+        new_max = hl.reduce(torch.max, summed, dim=1)
+        new_max_idx_local = torch.argmax(summed, dim=1)
+        new_max_idx_global = tile_v.begin + new_max_idx_local
+
+        replace_mask = new_max > gumbel_max[:, :]
+        gumbel_max[:, :] = torch.where(replace_mask, new_max, gumbel_max[:, :])
+        gumbel_max_idx[:, :] = torch.where(
+            replace_mask, new_max_idx_global, gumbel_max_idx[:, :]
+        )
+
+    return gumbel_max, gumbel_max_idx
