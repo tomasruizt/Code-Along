@@ -64,10 +64,10 @@ def fused_sample_triton(
     temperature: float,
     seed: int,
     block_size_v: int = 8,
+    block_size_d: int = 16,
 ):
     V, D = weights.shape
     D, seq_len = hidden_states.shape
-    block_size_d = triton.next_power_of_2(D)
     grid_size = triton.cdiv(V, block_size_v)
 
     maxs = torch.zeros((grid_size, seq_len, num_samples), dtype=torch.float32)
@@ -131,22 +131,29 @@ def fused_sample_triton_kernel(
     # its local max into main memory for a parallel reduction in stage 2.
 
     offsets_v = block_start + tl.arange(0, BLOCK_SIZE_V)
-    offsets_h = tl.arange(0, BLOCK_SIZE_D)
     mask_v = offsets_v < vocab_size
-    mask_h = offsets_h < hidden_size
-
-    w_offsets = offsets_v[:, None] * hidden_size + offsets_h[None, :]
-    w_blk = tl.load(
-        weights_ptr + w_offsets,
-        mask=mask_v[:, None] & mask_h[None, :],
-    )
 
     offset_seqlen = tl.arange(0, seq_len)
-    hidden_states_blk = tl.load(
-        hidden_states_ptr + offset_seqlen[None, :] + seq_len * offsets_h[:, None],
-        mask=mask_h[:, None],
-    )
-    logits_blk = tl.dot(w_blk, hidden_states_blk) / temperature  # [Vblk, seq_len]
+    logits_blk = tl.zeros((BLOCK_SIZE_V, seq_len), dtype=tl.float32)
+
+    # Compute a block of logits logits_blk
+    for d_start in range(0, hidden_size, BLOCK_SIZE_D):
+        offsets_h = d_start + tl.arange(0, BLOCK_SIZE_D)
+        mask_h = offsets_h < hidden_size
+
+        w_offsets = offsets_v[:, None] * hidden_size + offsets_h[None, :]
+        w_blk = tl.load(
+            weights_ptr + w_offsets,
+            mask=mask_v[:, None] & mask_h[None, :],
+        )
+
+        hidden_states_blk = tl.load(
+            hidden_states_ptr + offset_seqlen[None, :] + seq_len * offsets_h[:, None],
+            mask=mask_h[:, None],
+        )
+        logits_blk += tl.dot(w_blk, hidden_states_blk)
+
+    logits_blk = logits_blk / temperature  # [Vblk, seq_len]
 
     # Note: Creating appropriately sized tensors is tricky because
     # tl.arange() only accepts tl.constexpr that are powers of 2.

@@ -1,6 +1,8 @@
+from dataclasses import dataclass
+from time import time
 import timeit
 import pandas as pd
-from typing import Any
+from typing import Any, Callable
 import torch
 from fused_mm_sampling import fused_sample_triton, incremental_sample_pt, sample
 
@@ -19,47 +21,79 @@ speedtest_kwargs = dict(
 
 sample_compiled = torch.compile(sample)
 
-mapping = {
-    "naive-pt": lambda: sample(**speedtest_kwargs),
-    "naive-compiled": lambda: sample_compiled(**speedtest_kwargs),
-    # "fused-pt": lambda: incremental_sample_pt(**speedtest_kwargs),
-    "fused-triton": lambda: fused_sample_triton(
-        **speedtest_kwargs, seed=0, block_size_v=2
+
+@dataclass
+class Case:
+    name: str
+    fn: Callable[[], Any]
+    n_runs: int
+
+
+cases = [
+    Case(
+        name="fused-triton",
+        fn=lambda: fused_sample_triton(
+            **speedtest_kwargs, seed=0, block_size_v=8, block_size_d=16
+        ),
+        n_runs=10,
     ),
-}
+    Case(
+        name="naive-pt",
+        fn=lambda: sample(**speedtest_kwargs),
+        n_runs=10,
+    ),
+    Case(
+        name="naive-compiled",
+        fn=lambda: sample_compiled(**speedtest_kwargs),
+        n_runs=10,
+    ),
+]
 
 
-def benchmark(fn_name: str) -> dict[str, Any]:
-    print(f"Benchmarking fn='{fn_name}'")
+def benchmark(case: Case) -> pd.DataFrame:
+    print(f"Benchmarking fn='{case.name}'")
 
-    fn = mapping[fn_name]
     print("Warming up...")
     for _ in range(10):
-        fn()
+        case.fn().cpu()
 
     print("Timing...")
-    n_runs = 100
-    total_time = timeit.timeit(fn, number=n_runs)
-    # per run stats
-    secs = total_time / n_runs
-    msecs = secs * 1000
-    nsecs = msecs * 1000
+    start = time()
+    times = timeit.repeat(case.fn, number=case.n_runs)
+    end = time()
+    total_time = end - start
+    # According to time.repeat() the min() is the most informative statistic
     results = {
-        "name": fn_name,
-        "n_runs": n_runs,
-        "total_secs": total_time,
-        "secs": secs,
-        "msecs": msecs,
-        "nsecs": nsecs,
+        "name": case.name,
+        "total[s]": total_time,
+        "time[s]": times,
+        "time[ms]": [t * 1_000 for t in times],
+        "time[µs]": [t * 1_000_000 for t in times],
     }
-    return results
+    df = pd.DataFrame(results)
+    return df
 
 
 def benchmark_all() -> pd.DataFrame:
-    rows = [benchmark(fn_name) for fn_name in mapping]
-    return pd.DataFrame(rows)
+    import gc
+
+    gc.disable()
+    try:
+        dfs = [benchmark(case) for case in cases]
+        return pd.concat(dfs, ignore_index=True)
+    finally:
+        gc.enable()
 
 
 if __name__ == "__main__":
     df = benchmark_all()
-    print(df.round(3))
+    print(f"{vocab_size=}")
+    print(f"{hidden_size=}")
+    print(f"{seq_len=}")
+    print(f"{num_samples=}")
+
+    total_runtimes = df.groupby(["name", "total[s]"], as_index=False).size()
+    print(total_runtimes.round(2))
+
+    time_distribution = df.groupby("name")[["time[ms]"]].describe()
+    print(time_distribution.round(2))
