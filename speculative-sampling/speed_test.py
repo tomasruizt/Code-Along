@@ -2,11 +2,27 @@ from dataclasses import dataclass
 from time import time
 import timeit
 import pandas as pd
-from typing import Any, Callable
 import torch
-from fused_mm_sampling import fused_sample_triton, incremental_sample_pt, sample
+from fused_mm_sampling import fused_sample_triton, sample
+from pydantic_settings import BaseSettings
 
 torch.set_default_device("cuda")
+
+
+class Args(BaseSettings, cli_parse_args=True):
+    name: str | None = None
+    n_runs_warmup: int = 10
+    n_runs_benchmark: int = 1
+
+    def as_case(self) -> "Case":
+        assert self.n_runs_warmup is not None
+        assert self.n_runs_benchmark is not None
+        return Case(
+            name=self.name,
+            n_runs_benchmark=self.n_runs_benchmark,
+            n_runs_warmup=self.n_runs_warmup,
+        )
+
 
 vocab_size = 256000
 hidden_size = 5120
@@ -25,28 +41,23 @@ sample_compiled = torch.compile(sample)
 @dataclass
 class Case:
     name: str
-    fn: Callable[[], Any]
-    n_runs: int
+    n_runs_benchmark: int
+    n_runs_warmup: int = 10
 
 
-cases = [
-    Case(
-        name="fused-triton",
-        fn=lambda: fused_sample_triton(
-            **speedtest_kwargs, seed=0, block_size_v=8, block_size_d=16
-        ),
-        n_runs=10,
+fns = {
+    "fused-triton": lambda: fused_sample_triton(
+        **speedtest_kwargs, seed=0, block_size_v=8, block_size_d=16
     ),
-    Case(
-        name="naive-pt",
-        fn=lambda: sample(**speedtest_kwargs),
-        n_runs=10,
-    ),
-    Case(
-        name="naive-compiled",
-        fn=lambda: sample_compiled(**speedtest_kwargs),
-        n_runs=10,
-    ),
+    "naive-pt": lambda: sample(**speedtest_kwargs),
+    "naive-compiled": lambda: sample_compiled(**speedtest_kwargs),
+}
+
+
+all_cases = [
+    Case(name="fused-triton", n_runs_benchmark=10),
+    Case(name="naive-pt", n_runs_benchmark=10),
+    Case(name="naive-compiled", n_runs_benchmark=10),
 ]
 
 
@@ -54,12 +65,16 @@ def benchmark(case: Case) -> pd.DataFrame:
     print(f"Benchmarking fn='{case.name}'")
 
     print("Warming up...")
-    for _ in range(10):
-        case.fn().cpu()
+    fn = fns[case.name]
+    for _ in range(case.n_runs_warmup):
+        fn()
+    torch.cuda.synchronize()
 
     print("Timing...")
     start = time()
-    times = timeit.repeat(case.fn, number=case.n_runs)
+    with torch.cuda.nvtx.range("kernel"):
+        times = timeit.repeat(fn, repeat=case.n_runs_benchmark, number=1)
+        torch.cuda.synchronize()
     end = time()
     total_time = end - start
     # According to time.repeat() the min() is the most informative statistic
@@ -74,7 +89,7 @@ def benchmark(case: Case) -> pd.DataFrame:
     return df
 
 
-def benchmark_all() -> pd.DataFrame:
+def benchmark_all(cases: list[Case]) -> pd.DataFrame:
     import gc
 
     gc.disable()
@@ -86,7 +101,12 @@ def benchmark_all() -> pd.DataFrame:
 
 
 if __name__ == "__main__":
-    df = benchmark_all()
+    args = Args()
+    if args.name is not None:
+        cases = [args.as_case()]
+    else:
+        cases = all_cases
+    df = benchmark_all(cases)
     print(f"{vocab_size=}")
     print(f"{hidden_size=}")
     print(f"{seq_len=}")
