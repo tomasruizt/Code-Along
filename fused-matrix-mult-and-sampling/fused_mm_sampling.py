@@ -72,7 +72,9 @@ def fused_sample_triton(
 
     max_grid_size = triton.cdiv(V, MIN_BLOCK_SIZE_V)
     maxs = float("-inf") * torch.ones(
-        (max_grid_size, seq_len, num_samples), dtype=torch.float32
+        (max_grid_size, seq_len, num_samples),
+        dtype=torch.float32,
+        device=weights.device,
     )
     maxs_idx = torch.empty_like(maxs, dtype=torch.long)
 
@@ -80,7 +82,6 @@ def fused_sample_triton(
         return (triton.cdiv(V, meta["BLOCK_SIZE_V"]),)
 
     seqlen_p2 = triton.next_power_of_2(seq_len)
-    num_samples_p2 = triton.next_power_of_2(num_samples)
 
     fused_sample_triton_kernel[grid](
         weights_ptr=weights,
@@ -93,7 +94,8 @@ def fused_sample_triton(
         num_samples=num_samples,
         temperature=temperature,
         seed=seed,
-        num_samples_p2=num_samples_p2,
+        # BATCH_SIZE=MAX_SAMPLES_PER_BATCH,
+        # samples_bsz=samples_bsz,
         seqlen_p2=seqlen_p2,
     )
 
@@ -113,7 +115,15 @@ def fused_sample_triton(
 #     key=["vocab_size", "hidden_size", "seq_len", "num_samples"],
 # )
 @triton.autotune(
-    configs=[triton.Config({"BLOCK_SIZE_V": MIN_BLOCK_SIZE_V, "BLOCK_SIZE_D": 16})],
+    configs=[
+        triton.Config(
+            {
+                "BLOCK_SIZE_V": MIN_BLOCK_SIZE_V,
+                "BLOCK_SIZE_D": 16,
+                "SAMPLES_BSZ": 1,
+            }
+        )
+    ],
     key=["vocab_size", "hidden_size", "seq_len", "num_samples"],
 )
 @triton.jit
@@ -126,11 +136,11 @@ def fused_sample_triton_kernel(
     hidden_size: tl.constexpr,  # D
     seq_len: tl.constexpr,
     num_samples: tl.constexpr,
-    temperature: float,  # should this be a tl.constexpr?
+    temperature: float,
     seed: int,
     BLOCK_SIZE_V: tl.constexpr,
     BLOCK_SIZE_D: tl.constexpr,
-    num_samples_p2: tl.constexpr,
+    SAMPLES_BSZ: tl.constexpr,
     seqlen_p2: tl.constexpr,
 ):
     pid = tl.program_id(axis=0)
@@ -164,41 +174,51 @@ def fused_sample_triton_kernel(
 
     logits_blk = logits_blk / temperature  # [Vblk, seq_len]
 
-    # Note: Creating appropriately sized tensors is tricky because
-    # tl.arange() only accepts tl.constexpr that are powers of 2.
-    noise_size: tl.constexpr = BLOCK_SIZE_V * seqlen_p2 * num_samples_p2
-    noise_offsets = tl.arange(0, noise_size).reshape(
-        (num_samples_p2, BLOCK_SIZE_V, seqlen_p2)
-    )
-    # Note: Each program needs a different seed, otherwise they
-    # all create the same noise, leading to sampling artifacts.
-    unif_noise = tl.rand(seed + pid, noise_offsets)
-    gumbel_noise = -tl.log(-tl.log(unif_noise))
+    # Process samples in batches to limit memory usage
+    samples_n_batches: tl.constexpr = triton.cdiv(num_samples, SAMPLES_BSZ)
+    for batch_idx in range(samples_n_batches):
+        # Calculate how many samples in this batch
+        batch_start = batch_idx * SAMPLES_BSZ
+        batch_end = min(batch_start + SAMPLES_BSZ, num_samples)
+        actual_batch_size = batch_end - batch_start
 
-    gumbel_max, gumbel_max_idx_local = tl.max(
-        logits_blk + gumbel_noise, axis=1, return_indices=True
-    )  # [num_samples_p2, seqlen_p2]
-    gumbel_max_idx_global = gumbel_max_idx_local + block_start
+        # Note: Creating appropriately sized tensors is tricky because
+        # tl.arange() only accepts tl.constexpr that are powers of 2.
+        noise_size: tl.constexpr = BLOCK_SIZE_V * seqlen_p2 * SAMPLES_BSZ
+        noise_offsets = tl.arange(0, noise_size).reshape(
+            (SAMPLES_BSZ, BLOCK_SIZE_V, seqlen_p2)
+        )
+        # Note: Each program needs a different seed, otherwise they
+        # all create the same noise, leading to sampling artifacts.
+        # Also vary seed by batch_idx to ensure different noise per batch
+        unif_noise = tl.rand(seed + pid + batch_idx * 1000000, noise_offsets)
+        gumbel_noise = -tl.log(-tl.log(unif_noise))
 
-    out_blk_start = pid * seq_len * num_samples
+        gumbel_max, gumbel_max_idx_local = tl.max(
+            logits_blk + gumbel_noise, axis=1, return_indices=True
+        )  # [batch_size_p2, seqlen_p2]
+        gumbel_max_idx_global = gumbel_max_idx_local + block_start
 
-    # Note: It makes a difference if indices are row-major or column-major
-    # Note: The stride needs to match the non-padded shape!
-    out_offsets = (
-        tl.arange(0, num_samples_p2)[:, None]
-        + num_samples * tl.arange(0, seqlen_p2)[None, :]
-    )
-    out_mask = num_samples > tl.arange(0, num_samples_p2)[:, None]
-    tl.store(
-        max_out_ptr + out_blk_start + out_offsets,
-        gumbel_max,
-        mask=out_mask,
-    )
-    tl.store(
-        max_out_idx_ptr + out_blk_start + out_offsets,
-        gumbel_max_idx_global,
-        mask=out_mask,
-    )
+        # Output offset for this batch
+        out_blk_start = pid * seq_len * num_samples + batch_start
+
+        # Note: It makes a difference if indices are row-major or column-major
+        # Note: The stride needs to match the non-padded shape!
+        out_offsets = (
+            tl.arange(0, SAMPLES_BSZ)[:, None]
+            + num_samples * tl.arange(0, seqlen_p2)[None, :]
+        )
+        out_mask = tl.arange(0, SAMPLES_BSZ)[:, None] < actual_batch_size
+        tl.store(
+            max_out_ptr + out_blk_start + out_offsets,
+            gumbel_max,
+            mask=out_mask,
+        )
+        tl.store(
+            max_out_idx_ptr + out_blk_start + out_offsets,
+            gumbel_max_idx_global,
+            mask=out_mask,
+        )
 
 
 @helion.kernel(autotune_effort="none")
