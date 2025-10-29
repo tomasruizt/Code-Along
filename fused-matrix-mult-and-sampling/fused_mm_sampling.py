@@ -57,32 +57,30 @@ def cdiv(n: int, div: int) -> int:
     return (n + div - 1) // div
 
 
+MIN_BLOCK_SIZE_V = 8
+
+
 def fused_sample_triton(
     weights: torch.Tensor,
     hidden_states: torch.Tensor,
     num_samples: int,
     temperature: float,
     seed: int,
-    block_size_v: int = 8,
-    block_size_d: int = 16,
 ):
     V, D = weights.shape
     D, seq_len = hidden_states.shape
-    grid_size = triton.cdiv(V, block_size_v)
 
+    max_grid_size = triton.cdiv(V, MIN_BLOCK_SIZE_V)
     maxs = float("-inf") * torch.ones(
-        (grid_size, seq_len, num_samples), dtype=torch.float32
+        (max_grid_size, seq_len, num_samples), dtype=torch.float32
     )
     maxs_idx = torch.empty_like(maxs, dtype=torch.long)
 
-    # def grid(meta):
-    #     return (triton.cdiv(V, meta["BLOCK_SIZE"]),)
+    def grid(meta):
+        return (triton.cdiv(V, meta["BLOCK_SIZE_V"]),)
 
     seqlen_p2 = triton.next_power_of_2(seq_len)
     num_samples_p2 = triton.next_power_of_2(num_samples)
-    noise_size = block_size_v * seqlen_p2 * num_samples_p2
-
-    grid = (grid_size,)
 
     fused_sample_triton_kernel[grid](
         weights_ptr=weights,
@@ -95,9 +93,6 @@ def fused_sample_triton(
         num_samples=num_samples,
         temperature=temperature,
         seed=seed,
-        BLOCK_SIZE_V=block_size_v,
-        BLOCK_SIZE_D=block_size_d,
-        noise_size=noise_size,
         num_samples_p2=num_samples_p2,
         seqlen_p2=seqlen_p2,
     )
@@ -117,6 +112,10 @@ def fused_sample_triton(
 #     ],
 #     key=["vocab_size", "hidden_size", "seq_len", "num_samples"],
 # )
+@triton.autotune(
+    configs=[triton.Config({"BLOCK_SIZE_V": MIN_BLOCK_SIZE_V, "BLOCK_SIZE_D": 16})],
+    key=["vocab_size", "hidden_size", "seq_len", "num_samples"],
+)
 @triton.jit
 def fused_sample_triton_kernel(
     weights_ptr,
@@ -131,7 +130,6 @@ def fused_sample_triton_kernel(
     seed: int,
     BLOCK_SIZE_V: tl.constexpr,
     BLOCK_SIZE_D: tl.constexpr,
-    noise_size: tl.constexpr,
     num_samples_p2: tl.constexpr,
     seqlen_p2: tl.constexpr,
 ):
@@ -168,6 +166,7 @@ def fused_sample_triton_kernel(
 
     # Note: Creating appropriately sized tensors is tricky because
     # tl.arange() only accepts tl.constexpr that are powers of 2.
+    noise_size: tl.constexpr = BLOCK_SIZE_V * seqlen_p2 * num_samples_p2
     noise_offsets = tl.arange(0, noise_size).reshape(
         (num_samples_p2, BLOCK_SIZE_V, seqlen_p2)
     )
