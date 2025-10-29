@@ -70,8 +70,10 @@ def fused_sample_triton(
     D, seq_len = hidden_states.shape
     grid_size = triton.cdiv(V, block_size_v)
 
-    maxs = torch.zeros((grid_size, seq_len, num_samples), dtype=torch.float32)
-    maxs_idx = torch.zeros_like(maxs, dtype=torch.long)
+    maxs = float("-inf") * torch.ones(
+        (grid_size, seq_len, num_samples), dtype=torch.float32
+    )
+    maxs_idx = torch.empty_like(maxs, dtype=torch.long)
 
     # def grid(meta):
     #     return (triton.cdiv(V, meta["BLOCK_SIZE"]),)
@@ -106,6 +108,15 @@ def fused_sample_triton(
     return samples.squeeze(0)  # [seq_len, num_samples]
 
 
+# @triton.autotune(
+#     configs=[
+#         triton.Config({"BLOCK_SIZE_V": bv, "BLOCK_SIZE_D": bd})
+#         for bv in [16, 32, 64]
+#         for bd in [16, 32, 64]
+#         if bv * bd <= 8192  # Avoid configs that exceed shared memory on RTX 3090
+#     ],
+#     key=["vocab_size", "hidden_size", "seq_len", "num_samples"],
+# )
 @triton.jit
 def fused_sample_triton_kernel(
     weights_ptr,

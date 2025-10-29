@@ -1,3 +1,7 @@
+import os
+
+os.environ["TRITON_PRINT_AUTOTUNING"] = "1"
+
 from dataclasses import dataclass
 from time import time
 import timeit
@@ -46,9 +50,7 @@ class Case:
 
 
 fns = {
-    "fused-triton": lambda: fused_sample_triton(
-        **speedtest_kwargs, seed=0, block_size_v=8, block_size_d=16
-    ),
+    "fused-triton": lambda: fused_sample_triton(**speedtest_kwargs, seed=0),
     "naive-pt": lambda: sample(**speedtest_kwargs),
     "naive-compiled": lambda: sample_compiled(**speedtest_kwargs),
 }
