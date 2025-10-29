@@ -105,24 +105,18 @@ def fused_sample_triton(
     return samples.squeeze(0)  # [seq_len, num_samples]
 
 
-# @triton.autotune(
-#     configs=[
-#         triton.Config({"BLOCK_SIZE_V": bv, "BLOCK_SIZE_D": bd})
-#         for bv in [16, 32, 64]
-#         for bd in [16, 32, 64]
-#         if bv * bd <= 8192  # Avoid configs that exceed shared memory on RTX 3090
-#     ],
-#     key=["vocab_size", "hidden_size", "seq_len", "num_samples"],
-# )
 @triton.autotune(
     configs=[
         triton.Config(
             {
-                "BLOCK_SIZE_V": MIN_BLOCK_SIZE_V,
-                "BLOCK_SIZE_D": 16,
-                "SAMPLES_BSZ": 1,
+                "BLOCK_SIZE_V": bv,
+                "BLOCK_SIZE_D": bd,
+                "SAMPLES_BSZ": bsz,
             }
         )
+        for bv in [MIN_BLOCK_SIZE_V, 32]
+        for bd in [16, 32]
+        for bsz in [1, 4]
     ],
     key=["vocab_size", "hidden_size", "seq_len", "num_samples"],
 )
