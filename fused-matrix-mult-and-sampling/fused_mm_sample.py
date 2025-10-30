@@ -60,7 +60,7 @@ def cdiv(n: int, div: int) -> int:
 MIN_BLOCK_SIZE_V = 8
 
 
-def fused_sample_triton(
+def fused_mm_sample_triton(
     weights: torch.Tensor,
     hidden_states: torch.Tensor,
     num_samples: int,
@@ -83,7 +83,7 @@ def fused_sample_triton(
 
     seqlen_p2 = triton.next_power_of_2(seq_len)
 
-    fused_sample_triton_kernel[grid](
+    fused_mm_sample_triton_kernel[grid](
         weights_ptr=weights,
         hidden_states_ptr=hidden_states,
         max_out_ptr=maxs,
@@ -121,7 +121,7 @@ def fused_sample_triton(
     key=["vocab_size", "hidden_size", "seq_len", "num_samples"],
 )
 @triton.jit
-def fused_sample_triton_kernel(
+def fused_mm_sample_triton_kernel(
     weights_ptr,
     hidden_states_ptr,
     max_out_ptr,  # [grid_size, seq_len, num_samples]

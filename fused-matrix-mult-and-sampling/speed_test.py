@@ -7,7 +7,7 @@ from time import time
 import timeit
 import pandas as pd
 import torch
-from fused_mm_sampling import fused_sample_triton, sample
+from fused_mm_sampling import fused_mm_sample_triton, sample
 from pydantic_settings import BaseSettings
 
 torch.set_default_device("cuda")
@@ -50,7 +50,7 @@ class Case:
 
 
 fns = {
-    "fused-triton": lambda: fused_sample_triton(**speedtest_kwargs, seed=0),
+    "fused-triton": lambda: fused_mm_sample_triton(**speedtest_kwargs, seed=0),
     "naive-pt": lambda: sample(**speedtest_kwargs),
     "naive-compiled": lambda: sample_compiled(**speedtest_kwargs),
 }
