@@ -12,7 +12,7 @@ def py_softmax_kernel(x: list[float], out: list[float], n: int):
     d_jm1 = 0.0  # normalization term
     m_jm1 = float("-inf")  # maximum value
     for j in range(n):
-        xj = x[j]
+        xj = x[j]  # read from main memory
         mj = max(m_jm1, xj)
         dj = d_jm1 * math.exp(m_jm1 - mj) + math.exp(xj - mj)
         m_jm1 = mj
@@ -21,9 +21,10 @@ def py_softmax_kernel(x: list[float], out: list[float], n: int):
     mv = mj
     dv = dj
 
+    # second pass
     for i in range(n):
-        yi = math.exp(x[i] - mv) / dv
-        out[i] = yi
+        yi = math.exp(x[i] - mv) / dv  # read from main memory
+        out[i] = yi  # write to main memory
 
 
 x = torch.arange(5).float()
