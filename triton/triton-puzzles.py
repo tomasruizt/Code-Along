@@ -249,13 +249,3 @@ test(
     B={"B0": 1, "B1": 32},
     nelem={"N0": 4, "N1": 32, "T": 200},
 )
-
-
-@triton.jit
-def col(x):
-    return x[:, None]
-
-
-@triton.jit
-def row(x):
-    return x[None, :]
