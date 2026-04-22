@@ -1,3 +1,8 @@
+"""
+Triton puzzles can be found here: https://github.com/gpu-mode/Triton-Puzzles
+Open the Google Collab notebook to see the exercises.
+"""
+
 import os
 
 os.environ["TRITON_INTERPRET"] = "1"
