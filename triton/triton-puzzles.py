@@ -12,7 +12,7 @@ import triton_viz
 import triton
 import triton.language as tl
 import torch
-from jaxtyping import Float32
+from jaxtyping import Float32, Int32
 from torch import Tensor
 
 
@@ -182,7 +182,9 @@ def sum_spec(x: Float32[Tensor, "4 200"]) -> Float32[Tensor, "4"]:
 
 
 @triton.jit
-def sum_kernel(x_ptr, z_ptr, N0, N1, T, B0: tl.constexpr, B1: tl.constexpr):
+def sum_kernel(
+    x_ptr, z_ptr, N0, N1, T: tl.constexpr, B0: tl.constexpr, B1: tl.constexpr
+):
     pid = tl.program_id(0)
     rows = pid * B0 + tl.arange(0, B0)
     cols = tl.arange(0, B1)
@@ -210,7 +212,9 @@ def softmax_spec(x: Float32[Tensor, "4 200"]) -> Float32[Tensor, "4 200"]:
 
 
 @triton.jit
-def softmax_kernel(x_ptr, z_ptr, N0, N1, T, B0: tl.constexpr, B1: tl.constexpr):
+def softmax_kernel(
+    x_ptr, z_ptr, N0, N1, T: tl.constexpr, B0: tl.constexpr, B1: tl.constexpr
+):
     pid_0 = tl.program_id(0)
     log2_e = 1.44269504
     rows = pid_0 * B0 + tl.arange(0, B0)
@@ -264,7 +268,7 @@ def flashatt_spec(
 
 
 @triton.jit
-def flashatt_kernel(q_ptr, k_ptr, v_ptr, z_ptr, N0, T, B0: tl.constexpr):
+def flashatt_kernel(q_ptr, k_ptr, v_ptr, z_ptr, N0, T: tl.constexpr, B0: tl.constexpr):
     pid = tl.program_id(0)
     q_offs = pid * B0 + tl.arange(0, B0)
     q_mask = q_offs < N0
@@ -317,7 +321,15 @@ def conv2d_spec(
 
 @triton.jit
 def conv2d_kernel(
-    x_ptr, k_ptr, z_ptr, N0, H, W, KH: tl.constexpr, KW: tl.constexpr, B0: tl.constexpr
+    x_ptr,
+    k_ptr,
+    z_ptr,
+    N0,
+    H: tl.constexpr,
+    W: tl.constexpr,
+    KH: tl.constexpr,
+    KW: tl.constexpr,
+    B0: tl.constexpr,
 ):
     k_offs = tl.arange(0, KW)[None, :] + (KW * tl.arange(0, KH))[:, None]
     k = tl.load(k_ptr + k_offs)  # [KH,KW]
@@ -358,7 +370,7 @@ def dot_kernel(
     N0,
     N1,
     N2,
-    MID,
+    MID: tl.constexpr,
     B0: tl.constexpr,
     B1: tl.constexpr,
     B2: tl.constexpr,
@@ -397,4 +409,126 @@ test(
     dot_spec,
     B={"B0": 16, "B1": 16, "B2": 1, "B_MID": 16},
     nelem={"N0": 32, "N1": 32, "N2": 4, "MID": 32},
+)
+
+
+FPINT = 32 // 4
+GROUP = tl.constexpr(8)
+
+
+def quant_dot_spec(
+    scale: Float32[Tensor, "32 8"],
+    offset: Int32[Tensor, "32"],
+    weight: Int32[Tensor, "32 8"],
+    activation: Float32[Tensor, "64 32"],
+) -> Float32[Tensor, "32 32"]:
+    scale = scale[..., None].expand(-1, 8, GROUP).contiguous().view(-1, 64)
+    offset = offset.view(32, 1)
+    offset = (
+        extract(offset)[..., None].expand(-1, 1, 8, GROUP).contiguous().view(-1, 64)
+    )
+    ws = extract(weight).view(-1, 64)
+    assert scale.shape == (32, 64)
+    assert ws.shape == (32, 64)
+    assert offset.shape == (32, 64)
+    return (scale * ws - offset) @ activation
+
+
+def extract(x):
+    # x is made into a "col vector", and shifted by a row-vector of different shifts
+    # shifts by 0, 4, 8, ... bits
+    over = torch.arange(8, device="cuda") * 4
+    # mask = 2**4 - 1  # 15 = 8+7= 0b1111, or last 4 bits
+    mask = 0b1111
+    return (x[..., None] >> over) & mask
+
+
+@triton.jit
+def tl_extract(x):
+    """x: shape, out: [shape, 8]"""
+    if len(x.shape) == 2:
+        xs = x[:, :, None]
+    else:
+        xs = x[:, None]
+    over = tl.arange(0, 8) * 4
+    out = (xs >> over) & 0b1111
+    return out
+
+
+@triton.jit
+def expand_by_groupsize(x):
+    """x: [M,N] -> out: [M, N*GROUP]"""
+    M: tl.constexpr = x.shape[0]
+    N: tl.constexpr = x.shape[1]
+    idxs = (  # [N, GROUP]
+        tl.arange(0, N * GROUP) // GROUP * tl.full((M,), 1, dtype=tl.int32)[:, None]
+    )
+    return x.gather(idxs, 1)  # [M, N*GROUP]
+
+
+@triton.jit
+def quant_dot_kernel(
+    scale_ptr,
+    offset_ptr,
+    weight_ptr,
+    activation_ptr,
+    z_ptr,
+    N0,
+    N1,
+    MID: tl.constexpr,
+    B0: tl.constexpr,
+    B1: tl.constexpr,
+    B_MID: tl.constexpr,
+):
+    pid_0 = tl.program_id(0)
+    pid_1 = tl.program_id(1)
+
+    rows = pid_0 * B0 + tl.arange(0, B0)
+    cols = pid_1 * B1 + tl.arange(0, B1)
+
+    weights_htl = tl.arange(0, B_MID // 8)
+    acts_vtl = tl.arange(0, B_MID)
+
+    # dequant offsets
+    off_blk = tl.load(offset_ptr + rows)  # B0
+    off_blk = expand_by_groupsize(tl_extract(off_blk))  # [B0, 8*GROUP]
+
+    acc = tl.zeros((B0, B1), dtype=tl.float32)
+    for _ in range(0, MID, B_MID):
+        # load weights block
+        ws_blk = tl.load(  # [B0, BMID//8]
+            weight_ptr + weights_htl[None, :] + (B_MID // 8) * rows[:, None]
+        )
+        # dequantize weights
+        ws_blk = tl_extract(ws_blk)  # [B0, BMID//8, 8]
+        ws_blk = ws_blk.reshape((B0, B_MID))  # [B0, BMID]
+
+        # scales have same shape as weights, so we use the same offsets
+        scale_blk = tl.load(  # [B0, BMID//8]
+            scale_ptr + weights_htl[None, :] + (B_MID // 8) * rows[:, None]
+        )
+        scale_blk = expand_by_groupsize(scale_blk)  # [B0, BMID]
+
+        # load activation block
+        acts_off = cols[None, :] + N1 * acts_vtl[:, None]
+        acts_blk = tl.load(activation_ptr + acts_off)  # [BMID, B1]
+
+        # accumulate dot product
+        acc += tl.dot(  # [B0, B1]
+            scale_blk * ws_blk - off_blk, acts_blk, input_precision="ieee"
+        )
+
+        # next iter
+        weights_htl += B_MID // 8
+        acts_vtl += B_MID * N1
+
+    # save
+    tl.store(z_ptr + cols[None, :] + N1 * rows[:, None], acc)
+
+
+test(
+    quant_dot_kernel,
+    quant_dot_spec,
+    B={"B0": 16, "B1": 16, "B_MID": 64},
+    nelem={"N0": 32, "N1": 32, "MID": 64},
 )
