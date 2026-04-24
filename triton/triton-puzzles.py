@@ -3,9 +3,9 @@ Triton puzzles can be found here: https://github.com/gpu-mode/Triton-Puzzles
 Open the Google Collab notebook to see the exercises.
 """
 
-import os
+# import os
 
-os.environ["TRITON_INTERPRET"] = "1"
+# os.environ["TRITON_INTERPRET"] = "1"
 
 import inspect
 import triton_viz
@@ -16,7 +16,7 @@ from jaxtyping import Float32
 from torch import Tensor
 
 
-def test(puzzle, puzzle_spec, nelem={}, B={"B0": 32}, viz=True):
+def test(puzzle, puzzle_spec, nelem={}, B={"B0": 32}, device="cuda"):
     B = dict(B)
     if "N1" in nelem and "B1" not in B:
         B["B1"] = 32
@@ -34,9 +34,9 @@ def test(puzzle, puzzle_spec, nelem={}, B={"B0": 32}, viz=True):
 
     tt_args = []
     for k, (v, t) in args.items():
-        tt_args.append(torch.rand(*v) - 0.5)
+        tt_args.append(torch.rand(*v, device=device) - 0.5)
         if t is not None and t.annotation.dtypes[0] == "int32":
-            tt_args[-1] = torch.randint(-100000, 100000, v)
+            tt_args[-1] = torch.randint(-100000, 100000, v, device=device)
     grid = lambda meta: (
         triton.cdiv(nelem["N0"], meta["B0"]),
         triton.cdiv(nelem.get("N1", 1), meta.get("B1", 1)),
@@ -45,7 +45,7 @@ def test(puzzle, puzzle_spec, nelem={}, B={"B0": 32}, viz=True):
 
     # for k, v in args.items():
     #    print(k, v)
-    triton_viz.trace("tracer")(puzzle)[grid](*tt_args, **B, **nelem)
+    puzzle[grid](*tt_args, **B, **nelem)
     z = tt_args[-1]
     tt_args = tt_args[:-1]
     z_ = puzzle_spec(*tt_args)
@@ -87,7 +87,7 @@ def add_vec_block_kernel(
     tl.store(z_ptr + z_offs, x[None, :] + y[:, None], mask=z_mask)
 
 
-test(add_vec_block_kernel, add_vec_block_spec, nelem={"N0": 100, "N1": 90}, viz=False)
+test(add_vec_block_kernel, add_vec_block_spec, nelem={"N0": 100, "N1": 90})
 
 
 def mul_relu_block_spec(
@@ -182,9 +182,7 @@ def sum_spec(x: Float32[Tensor, "4 200"]) -> Float32[Tensor, "4"]:
 
 
 @triton.jit
-def sum_kernel(
-    x_ptr, z_ptr, N0, N1, T: tl.constexpr, B0: tl.constexpr, B1: tl.constexpr
-):
+def sum_kernel(x_ptr, z_ptr, N0, N1, T, B0: tl.constexpr, B1: tl.constexpr):
     pid = tl.program_id(0)
     rows = pid * B0 + tl.arange(0, B0)
     cols = tl.arange(0, B1)
@@ -212,9 +210,7 @@ def softmax_spec(x: Float32[Tensor, "4 200"]) -> Float32[Tensor, "4 200"]:
 
 
 @triton.jit
-def softmax_kernel(
-    x_ptr, z_ptr, N0, N1, T: tl.constexpr, B0: tl.constexpr, B1: tl.constexpr
-):
+def softmax_kernel(x_ptr, z_ptr, N0, N1, T, B0: tl.constexpr, B1: tl.constexpr):
     pid_0 = tl.program_id(0)
     log2_e = 1.44269504
     rows = pid_0 * B0 + tl.arange(0, B0)
@@ -254,3 +250,54 @@ test(
     B={"B0": 1, "B1": 32},
     nelem={"N0": 4, "N1": 32, "T": 200},
 )
+
+
+def flashatt_spec(
+    q: Float32[Tensor, "200"], k: Float32[Tensor, "200"], v: Float32[Tensor, "200"]
+) -> Float32[Tensor, "200"]:
+    x = q[:, None] * k[None, :]
+    x_max = x.max(1, keepdim=True)[0]
+    x = x - x_max
+    x_exp = x.exp()
+    soft = x_exp / x_exp.sum(1, keepdim=True)
+    return (v[None, :] * soft).sum(1)
+
+
+@triton.jit
+def flashatt_kernel(q_ptr, k_ptr, v_ptr, z_ptr, N0, T, B0: tl.constexpr):
+    pid = tl.program_id(0)
+    q_offs = pid * B0 + tl.arange(0, B0)
+    q_mask = q_offs < N0
+
+    x_max = tl.full((B0,), float("-inf"), dtype=tl.float32)
+    num = tl.zeros((B0,), dtype=tl.float32)
+    denom = tl.zeros((B0,), dtype=tl.float32)
+    q = tl.load(q_ptr + q_offs, mask=q_mask, other=0.0)
+
+    kv_offs = tl.arange(0, B0)
+    kv_mask = kv_offs < N0
+    for _ in range(0, T, B0):
+        k = tl.load(k_ptr + kv_offs, mask=kv_mask, other=0.0)
+        v = tl.load(v_ptr + kv_offs, mask=kv_mask, other=0.0)
+
+        # q column vec, v row vec, outer product
+        x = q[:, None] * k[None, :]  # [B0,B0]
+        x = tl.where(kv_mask[None, :], x, float("-inf"))
+
+        new_x_max = tl.maximum(x.max(1), x_max)  # B0
+        x = x - new_x_max[:, None]
+        x_exp = tl.exp(x)
+        rescale = tl.exp(x_max - new_x_max)
+
+        denom = denom * rescale + x_exp.sum(1)
+        num = num * rescale + (v[None, :] * x_exp).sum(1)
+
+        x_max = new_x_max
+        kv_offs += B0
+        kv_mask = kv_offs < N0
+
+    # z has same offsets as q
+    tl.store(z_ptr + q_offs, num / denom, mask=q_mask)
+
+
+test(flashatt_kernel, flashatt_spec, B={"B0": 64}, nelem={"N0": 200, "T": 200})
