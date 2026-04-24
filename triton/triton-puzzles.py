@@ -301,3 +301,44 @@ def flashatt_kernel(q_ptr, k_ptr, v_ptr, z_ptr, N0, T, B0: tl.constexpr):
 
 
 test(flashatt_kernel, flashatt_spec, B={"B0": 64}, nelem={"N0": 200, "T": 200})
+
+
+def conv2d_spec(
+    x: Float32[Tensor, "4 8 8"], k: Float32[Tensor, "4 4"]
+) -> Float32[Tensor, "4 8 8"]:
+    z = torch.zeros(4, 8, 8, device="cuda")
+    x = torch.nn.functional.pad(x, (0, 4, 0, 4, 0, 0), value=0.0)
+    print(x.shape, k.shape)
+    for i in range(8):
+        for j in range(8):
+            z[:, i, j] = (k[None, :, :] * x[:, i : i + 4, j : j + 4]).sum(1).sum(1)
+    return z
+
+
+@triton.jit
+def conv2d_kernel(
+    x_ptr, k_ptr, z_ptr, N0, H, W, KH: tl.constexpr, KW: tl.constexpr, B0: tl.constexpr
+):
+    k_offs = tl.arange(0, KW)[None, :] + (KW * tl.arange(0, KH))[:, None]
+    k = tl.load(k_ptr + k_offs)  # [KH,KW]
+
+    pid = tl.program_id(0)
+    pid_offs = pid * W * H
+
+    for col in range(0, W):
+        for row in range(0, H):
+            x_htl = col + tl.arange(0, KW)
+            x_vtl = row + tl.arange(0, KH)
+            x_off = pid_offs + x_htl[None, :] + (W * x_vtl)[:, None]
+            x_mask = (x_htl < W)[None, :] & (x_vtl < H)[:, None]
+            x = tl.load(x_ptr + x_off, mask=x_mask, other=0.0)
+            z = (x * k).sum()  # scalar
+            tl.store(z_ptr + pid_offs + col + W * row, z)
+
+
+test(
+    conv2d_kernel,
+    conv2d_spec,
+    B={"B0": 1},
+    nelem={"N0": 4, "H": 8, "W": 8, "KH": 4, "KW": 4},
+)
