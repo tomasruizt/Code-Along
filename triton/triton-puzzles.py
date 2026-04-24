@@ -342,3 +342,59 @@ test(
     B={"B0": 1},
     nelem={"N0": 4, "H": 8, "W": 8, "KH": 4, "KW": 4},
 )
+
+
+def dot_spec(
+    x: Float32[Tensor, "4 32 32"], y: Float32[Tensor, "4 32 32"]
+) -> Float32[Tensor, "4 32 32"]:
+    return x @ y
+
+
+@triton.jit
+def dot_kernel(
+    x_ptr,
+    y_ptr,
+    z_ptr,
+    N0,
+    N1,
+    N2,
+    MID,
+    B0: tl.constexpr,
+    B1: tl.constexpr,
+    B2: tl.constexpr,
+    B_MID: tl.constexpr,
+):
+    pid_0 = tl.program_id(0)
+    pid_1 = tl.program_id(1)
+    pid_2 = tl.program_id(2)
+
+    x_bsz = pid_2 * N0 * MID
+    y_bsz = pid_2 * N1 * MID
+    z_bsz = pid_2 * N0 * N1
+
+    acc = tl.zeros((B0, B1), dtype=tl.float32)
+
+    rows = pid_0 * B0 + tl.arange(0, B0)
+    cols = pid_1 * B1 + tl.arange(0, B1)
+    x_offs = tl.arange(0, B_MID)[None, :] + MID * rows[:, None]
+    y_offs = cols[None, :] + N1 * tl.arange(0, B_MID)[:, None]
+    for _ in range(0, MID, B_MID):
+        # load tile x [B0,BMID]
+        x_blk = tl.load(x_ptr + x_bsz + x_offs)
+        # load tile y [BMID,B1]
+        y_blk = tl.load(y_ptr + y_bsz + y_offs)
+        # accum dot product tile z [B0,B1]
+        acc += tl.dot(x_blk, y_blk, input_precision="ieee")
+        x_offs += B_MID
+        y_offs += B_MID * N1
+    # save
+    z_offs = cols[None, :] + N1 * (rows[:, None])
+    tl.store(z_ptr + z_bsz + z_offs, acc)
+
+
+test(
+    dot_kernel,
+    dot_spec,
+    B={"B0": 16, "B1": 16, "B2": 1, "B_MID": 16},
+    nelem={"N0": 32, "N1": 32, "N2": 4, "MID": 32},
+)
