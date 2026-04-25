@@ -1,0 +1,78 @@
+==PROF== Connected to process 2690289 (/home/tomasruiz/.pyenv/versions/3.11.9/bin/python3.11)
+grid = (128, 330)
+==PROF== Profiling "rms_norm_kernel": 0%....50%....100% - 8 passes
+✅ Correct!
+==PROF== Disconnected from process 2690289
+[2690289] python3.11@127.0.0.1
+  rms_norm_kernel (128, 330, 1)x(128, 1, 1), Context 1, Stream 7, Device 0, CC 8.6
+    Section: GPU Speed Of Light Throughput
+    ----------------------- ----------- ------------
+    Metric Name             Metric Unit Metric Value
+    ----------------------- ----------- ------------
+    DRAM Frequency                  Ghz         9.49
+    SM Frequency                    Ghz         1.39
+    Elapsed Cycles                cycle      380,839
+    Memory Throughput                 %        88.99
+    DRAM Throughput                   %        17.22
+    Duration                         us       273.76
+    L1/TEX Cache Throughput           %        89.75
+    L2 Cache Throughput               %        10.74
+    SM Active Cycles              cycle   376,531.33
+    Compute (SM) Throughput           %        88.99
+    ----------------------- ----------- ------------
+
+    INF   This workload is utilizing greater than 80.0% of the available compute or memory performance of this device.  
+          To further improve performance, work will likely need to be shifted from the most utilized to another unit.   
+          Start by analyzing workloads in the Compute Workload Analysis section.                                        
+
+    Section: Launch Statistics
+    -------------------------------- --------------- ---------------
+    Metric Name                          Metric Unit    Metric Value
+    -------------------------------- --------------- ---------------
+    Block Size                                                   128
+    Function Cache Configuration                     CachePreferNone
+    Grid Size                                                 42,240
+    Registers Per Thread             register/thread              16
+    Shared Memory Configuration Size           Kbyte           16.38
+    Driver Shared Memory Per Block       Kbyte/block            1.02
+    Dynamic Shared Memory Per Block       byte/block               0
+    Static Shared Memory Per Block        byte/block               0
+    # SMs                                         SM              82
+    Stack Size                                                 1,024
+    Threads                                   thread       5,406,720
+    # TPCs                                                        41
+    Enabled TPC IDs                                              all
+    Uses Green Context                                             0
+    Waves Per SM                                               42.93
+    -------------------------------- --------------- ---------------
+
+    Section: Occupancy
+    ------------------------------- ----------- ------------
+    Metric Name                     Metric Unit Metric Value
+    ------------------------------- ----------- ------------
+    Block Limit SM                        block           16
+    Block Limit Registers                 block           32
+    Block Limit Shared Mem                block           16
+    Block Limit Warps                     block           12
+    Theoretical Active Warps per SM        warp           48
+    Theoretical Occupancy                     %          100
+    Achieved Occupancy                        %        95.86
+    Achieved Active Warps Per SM           warp        46.01
+    ------------------------------- ----------- ------------
+
+    Section: GPU and Memory Workload Distribution
+    -------------------------- ----------- ------------
+    Metric Name                Metric Unit Metric Value
+    -------------------------- ----------- ------------
+    Average DRAM Active Cycles       cycle      447,336
+    Total DRAM Elapsed Cycles        cycle   31,175,680
+    Average L1 Active Cycles         cycle   376,531.33
+    Total L1 Elapsed Cycles          cycle   31,138,622
+    Average L2 Active Cycles         cycle   368,958.96
+    Total L2 Elapsed Cycles          cycle   18,130,656
+    Average SM Active Cycles         cycle   376,531.33
+    Total SM Elapsed Cycles          cycle   31,138,622
+    Average SMSP Active Cycles       cycle   376,481.78
+    Total SMSP Elapsed Cycles        cycle  124,554,488
+    -------------------------- ----------- ------------
+

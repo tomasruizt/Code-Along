@@ -24,14 +24,15 @@ def rms_norm(x, g):
 
 def rl_rms_norm(x, g):
     B, S, D = x.shape
-    BLOCK_S = 16
-    BLOCK_D = 32
+    BLOCK_S = 1
+    BLOCK_D = 512
     out = torch.empty_like(x, device=DEVICE)
 
     grid = (
         B,
         (S + BLOCK_S - 1) // BLOCK_S,
     )
+    print("grid =", grid)
     rms_norm_kernel[grid](x, g, out, S, D, BLOCK_S, BLOCK_D)
     return out
 
@@ -78,8 +79,8 @@ def rms_norm_kernel(
 
 
 if __name__ == "__main__":
-    B = 14  # bsz
-    S = 33
+    B = 128  # bsz
+    S = 330
     D = 257
     torch.manual_seed(0)
     x = torch.randn((B, S, D), dtype=torch.bfloat16, device=DEVICE)
