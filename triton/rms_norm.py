@@ -8,7 +8,7 @@ DEVICE = "cuda"
 def rms_norm(x, g):
     """
     Root mean square normalization
-    x: [S, D]
+    x: [B, S, D]
     g: D
     per entry in seqlen
     out: xi gi / RMS
@@ -17,18 +17,21 @@ def rms_norm(x, g):
     """
     e = 1e-6
     x = x.float()
-    xmean = (x**2).mean(-1, keepdims=True)  # [B, 1]
-    out = g[None, :] * x * torch.rsqrt(xmean + e)
+    xmean = (x**2).mean(-1, keepdims=True)  # [B, S, 1]
+    out = g * x * torch.rsqrt(xmean + e)
     return out.to(torch.bfloat16)
 
 
 def rl_rms_norm(x, g):
-    S, D = x.shape
+    B, S, D = x.shape
     BLOCK_S = 16
     BLOCK_D = 32
     out = torch.empty_like(x, device=DEVICE)
 
-    grid = ((S + BLOCK_S - 1) // BLOCK_S,)
+    grid = (
+        B,
+        (S + BLOCK_S - 1) // BLOCK_S,
+    )
     rms_norm_kernel[grid](x, g, out, S, D, BLOCK_S, BLOCK_D)
     return out
 
@@ -37,7 +40,9 @@ def rl_rms_norm(x, g):
 def rms_norm_kernel(
     x_ptr, g_ptr, out_ptr, S, D, BLOCK_S: tl.constexpr, BLOCK_D: tl.constexpr
 ):
-    pid = tl.program_id(0)
+    pid_bsz = tl.program_id(0)
+    bsz_offs = pid_bsz * S * D
+    pid = tl.program_id(1)
     # rows stay fixed per program
     rows = pid * BLOCK_S + tl.arange(0, BLOCK_S)
 
@@ -49,7 +54,7 @@ def rms_norm_kernel(
         # compute RMS
         # load x, square, sum
         mask = (cols < D)[None, :] & (rows < S)[:, None]
-        x_offs = cols[None, :] + D * rows[:, None]
+        x_offs = bsz_offs + cols[None, :] + D * rows[:, None]
         x = tl.load(x_ptr + x_offs, mask=mask, other=0.0)  # [BLOCK_S, BLOCK_D]
         x = x.to(tl.float32)
         squared_sums += (x * x).sum(1)  # BLOCK_S
@@ -62,7 +67,7 @@ def rms_norm_kernel(
     for _ in range(0, D, BLOCK_D):
         # load x, normalize, write x
         mask = (cols < D)[None, :] & (rows < S)[:, None]
-        x_offs = cols[None, :] + D * rows[:, None]
+        x_offs = bsz_offs + cols[None, :] + D * rows[:, None]
         x = tl.load(x_ptr + x_offs, mask=mask, other=0.0)  # [BLOCK_S, BLOCK_D]
         # load g
         g = tl.load(g_ptr + cols, mask=cols < D, other=0.0)  # [BLOCK_D]
@@ -73,10 +78,11 @@ def rms_norm_kernel(
 
 
 if __name__ == "__main__":
+    B = 14  # bsz
     S = 33
     D = 257
     torch.manual_seed(0)
-    x = torch.randn((S, D), dtype=torch.bfloat16, device=DEVICE)
+    x = torch.randn((B, S, D), dtype=torch.bfloat16, device=DEVICE)
     g = torch.randn(D, dtype=torch.bfloat16, device=DEVICE)
     expected = rms_norm(x, g)
     actual = rl_rms_norm(x, g)
