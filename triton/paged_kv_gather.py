@@ -315,6 +315,24 @@ if __name__ == "__main__":
                 num_blocks=256,
             ),
         ),
+        # Hypothesis: per-block grid wins clearly here.
+        # - kv_cache = 2048 * 16 * 8 * 128 * 2 B = 64 MB, far exceeds L2 (~6 MB
+        #   on CC 8.6), so reads actually hit DRAM and bandwidth efficiency matters.
+        # - per-token grid = 16 * 2048 = 32,768 CTAs (~33 waves on 82 SMs):
+        #   launch overhead dominates.
+        # - per-block grid = 16 * 128 = 2,048 CTAs (~2 waves): clean, no tail.
+        # - Llama-3-style shapes: head_dim=128, GQA num_kv_heads=8, ctx=2048.
+        (
+            "large-realistic",
+            dict(
+                num_seqs=16,
+                max_blocks_per_seq=128,
+                block_size=16,
+                num_kv_heads=8,
+                head_dim=128,
+                num_blocks=2048,
+            ),
+        ),
     ]
 
     all_ok = True
