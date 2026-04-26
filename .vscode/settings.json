@@ -4,7 +4,10 @@
     ],
     "python.testing.unittestEnabled": false,
     "python.testing.pytestEnabled": true,
+    "C_Cpp.intelliSenseEngine": "disabled",
     "files.associations": {
+        "*.cu": "cpp",
+        "*.cuh": "cpp",
         "random": "cpp",
         "queue": "cpp",
         "stack": "cpp",

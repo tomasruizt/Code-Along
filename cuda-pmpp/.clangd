@@ -1,0 +1,35 @@
+If:
+  PathMatch: .*\.(cu|cuh)
+CompileFlags:
+  Add:
+    - -x
+    - cuda
+    - --cuda-path=/usr/local/cuda
+    - --cuda-gpu-arch=sm_86
+    - --no-cuda-version-check
+    - --gcc-toolchain=/usr
+    - -std=c++17
+    - -D_GLIBCXX_USE_CXX11_ABI=1
+    - -DTORCH_API_INCLUDE_EXTENSION_H
+    - -DTORCH_EXTENSION_NAME=cuda_warmup_module
+    - -D__CUDA_NO_HALF_OPERATORS__
+    - -D__CUDA_NO_HALF_CONVERSIONS__
+    - -D__CUDA_NO_BFLOAT16_CONVERSIONS__
+    - -D__CUDA_NO_HALF2_OPERATORS__
+    - -isystem/usr/include/c++/11
+    - -isystem/usr/include/x86_64-linux-gnu/c++/11
+    - -isystem/usr/include/c++/11/backward
+    - -isystem/usr/lib/gcc/x86_64-linux-gnu/11/include
+    - -isystem/usr/include/x86_64-linux-gnu
+    - -isystem/usr/include
+    - -isystem/home/tomasruiz/code/Code-Along/.venv/lib/python3.11/site-packages/torch/include
+    - -isystem/home/tomasruiz/code/Code-Along/.venv/lib/python3.11/site-packages/torch/include/torch/csrc/api/include
+    - -isystem/usr/local/cuda/include
+    - -isystem/home/tomasruiz/.pyenv/versions/3.11.9/include/python3.11
+  Remove:
+    - -forward-unknown-to-host-compiler
+    - -gencode*
+    - --generate-code*
+    - --options-file
+    - -ccbin*
+    - --expt-relaxed-constexpr
