@@ -21,3 +21,11 @@ def transpose_ref(x: torch.Tensor) -> torch.Tensor:
 
 def gemm_ref(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
     return a @ b
+
+
+def causal_qk_ref(q: torch.Tensor, k: torch.Tensor) -> torch.Tensor:
+    # q, k: [N, D]. Output S: [N, N] with S[i, j] = q[i] · k[j] for j <= i, else -inf.
+    s = q @ k.t()
+    n = q.size(0)
+    mask = torch.triu(torch.ones(n, n, dtype=torch.bool, device=q.device), diagonal=1)
+    return s.masked_fill(mask, float("-inf"))
