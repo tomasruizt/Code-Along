@@ -1,0 +1,4 @@
+# ncompass
+.nc_trace_cache
+
+traces/*
