@@ -74,42 +74,15 @@ For every exercise, the script should print a small summary after profiling: ten
 
 File: `scripts/01_stream_basics.py`
 
-Goal: learn how independent CUDA streams enqueue work, when they can overlap, and when explicit synchronization is required.
+Goal: learn how independent CUDA streams let work overlap on the GPU, and how an explicit stream dependency forces serialization.
 
-Implement:
+Use `torch.matmul(a, b, out=out)` (cuBLAS) — not a hand-written kernel — to build two independent GEMM workloads (`out0 = a0 @ b0`, `out1 = a1 @ b1`). Call each in a short loop (e.g. 10 iterations) so the region is long enough to read in Nsight Systems, and pass `out=` with a preallocated output tensor so you don't trigger a `cudaMalloc` on every iteration. Implement three variants:
 
-- Build two independent PyTorch GEMM workloads (not a custom/tiled matmul). For example, allocate `a0, b0, a1, b1` on CUDA and repeatedly compute `out0 = a0 @ b0` and `out1 = a1 @ b1`.
-- Choose matrix sizes and loop counts so each workload takes long enough to see in Nsight Systems, but not so large that a single GEMM monopolizes the whole GPU. Start with moderately sized square matrices and tune from there.
-- Preallocate outputs with `torch.empty_like(...)` or explicit output tensors and use `torch.mm(a, b, out=out)` to avoid measuring allocation noise in every iteration.
-- Baseline variant: run workload A, then workload B, both on the default CUDA stream. Concretely, this is two Python `for` loops or two calls to a helper like `run_gemm_loop("gemm_a", a0, b0, out0)` followed by `run_gemm_loop("gemm_b", a1, b1, out1)`.
-- Overlap variant: create `stream_a = torch.cuda.Stream()` and `stream_b = torch.cuda.Stream()`. Submit workload A inside `with torch.cuda.stream(stream_a): ...` and workload B inside `with torch.cuda.stream(stream_b): ...`, then synchronize before reading results.
-- Dependency variant: run the same two-stream code but force `stream_b.wait_stream(stream_a)` before launching workload B. This should make the timeline look sequential again.
-- Add CUDA event timings for each variant and NVTX ranges named `sequential_a`, `sequential_b`, `stream_a`, `stream_b`, and `stream_dependency`. Wrap the A/B GEMM loops in NVTX ranges too, for example `gemm_a` and `gemm_b`, because otherwise identical cuBLAS matmul kernels are hard to distinguish in Nsight Systems.
+- **Sequential baseline**: workload A then workload B, both on the default stream.
+- **Two-stream overlap**: A on `stream_a` and B on `stream_b` via `with torch.cuda.stream(...)`, then synchronize before reading results.
+- **Dependency**: the two-stream code, but call `stream_b.wait_stream(stream_a)` before launching B. The timeline should look sequential again.
 
-Suggested shape:
-
-```python
-def gemm_loop(label, a, b, out, iters):
-    with nvtx_range(label):
-        for _ in range(iters):
-            torch.mm(a, b, out=out)
-
-
-def run_sequential():
-    with nvtx_range("sequential_a"):
-        gemm_loop("gemm_a", a0, b0, out0, iters)
-    with nvtx_range("sequential_b"):
-        gemm_loop("gemm_b", a1, b1, out1, iters)
-
-
-def run_two_streams():
-    with torch.cuda.stream(stream_a):
-        with nvtx_range("stream_a"):
-            gemm_loop("gemm_a", a0, b0, out0, iters)
-    with torch.cuda.stream(stream_b):
-        with nvtx_range("stream_b"):
-            gemm_loop("gemm_b", a1, b1, out1, iters)
-```
+Label each region with NVTX ranges (e.g. `@nvtx.annotate` on the variant functions and on the per-workload GEMM loops) so identical cuBLAS kernels are distinguishable in Nsight Systems.
 
 Run/profile:
 
@@ -117,12 +90,13 @@ Run/profile:
 make exercise-01
 ```
 
-Prove:
+Prove (the GPU timeline is the source of truth):
 
-- In the baseline trace, GEMM kernels from workload A finish before workload B starts.
-- In the two-stream trace, kernels from workload A and workload B appear on different CUDA streams and overlap horizontally if the chosen matrix sizes allow concurrency.
-- In the dependency trace, adding `stream_b.wait_stream(stream_a)` removes the overlap.
-- CPU wall-clock timing without synchronization is misleading; CUDA event timing or explicit `torch.cuda.synchronize()` is required for meaningful timings.
+- **Sequential**: A's kernels finish before B's start — single stream, no overlap.
+- **Two-stream**: A and B kernels appear on different streams and overlap horizontally.
+- **Dependency**: `wait_stream` removes the overlap — back to sequential.
+
+Note: when the streams overlap, the matmul kernels each run slower than in the sequential baseline. What might be the reason?
 
 ## Exercise 2: Copy/Compute Overlap
 
