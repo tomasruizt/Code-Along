@@ -76,7 +76,7 @@ File: `scripts/01_stream_basics.py`
 
 Goal: learn how independent CUDA streams let work overlap on the GPU, and how an explicit stream dependency forces serialization.
 
-Use `torch.matmul(a, b, out=out)` (cuBLAS) — not a hand-written kernel — to build two independent GEMM workloads (`out0 = a0 @ b0`, `out1 = a1 @ b1`). Call each in a short loop (e.g. 10 iterations) so the region is long enough to read in Nsight Systems, and pass `out=` with a preallocated output tensor so you don't trigger a `cudaMalloc` on every iteration. Implement three variants:
+Use `torch.matmul(a, b, out=out)` (cuBLAS), not a hand-written kernel, to build two independent GEMM workloads (`out0 = a0 @ b0`, `out1 = a1 @ b1`). Call each in a short loop (e.g. 10 iterations) so the region is long enough to read in Nsight Systems, and pass `out=` with a preallocated output tensor so you don't trigger a `cudaMalloc` on every iteration. Implement three variants:
 
 - **Sequential baseline**: workload A then workload B, both on the default stream.
 - **Two-stream overlap**: A on `stream_a` and B on `stream_b` via `with torch.cuda.stream(...)`, then synchronize before reading results.
@@ -92,9 +92,9 @@ make exercise-01
 
 Prove (the GPU timeline is the source of truth):
 
-- **Sequential**: A's kernels finish before B's start — single stream, no overlap.
+- **Sequential**: A's kernels finish before B's start: single stream, no overlap.
 - **Two-stream**: A and B kernels appear on different streams and overlap horizontally.
-- **Dependency**: `wait_stream` removes the overlap — back to sequential.
+- **Dependency**: `wait_stream` removes the overlap: back to sequential.
 
 Note: when the streams overlap, the matmul kernels each run slower than in the sequential baseline. What might be the reason?
 
@@ -102,34 +102,18 @@ Note: when the streams overlap, the matmul kernels each run slower than in the s
 
 File: `scripts/02_copy_compute_overlap.py`
 
-Goal: learn when `non_blocking=True` and pinned host memory allow host-to-device copy to overlap with independent GPU compute.
+Goal: learn how a host-to-device copy can run concurrently with independent GPU compute using a separate stream, pinned memory, and `non_blocking=True`.
 
-Implement:
+Use two pieces of work that don't touch each other's data: (1) a **copy** of a large CPU tensor to the GPU, and (2) **compute** a matmul. Size them so the copy and the compute take roughly comparable time. That's when overlap is interesting. Implement two variants:
 
-- Allocate a large CPU source tensor with `pin_memory=True`, a destination CUDA tensor or copied CUDA batch, and a separate CUDA compute workload that does not depend on the copied data.
-- Baseline: copy CPU data to GPU, synchronize, then run the independent compute workload.
-- Overlap version: launch the pinned-memory HtoD copy on `copy_stream` with `non_blocking=True`, then immediately run the independent compute workload on the default stream.
-- Before consuming the copied tensor, make the default stream wait for `copy_stream`.
-- Use `record_stream` for tensors whose lifetime crosses streams, especially copied CUDA tensors managed by PyTorch's caching allocator.
-- NVTX ranges named `h2d_copy`, `independent_compute`, and `consume_copied_batch`.
+- **Sequential baseline**: copy the CPU tensor to the GPU, then run the compute (the order doesn't matter), both on the default stream, so stream ordering already serializes them (no explicit `synchronize()` needed). Finally, sum the outputs of both ops.
+- **Overlap**: launch the pinned HtoD copy with `non_blocking=True` on a new stream and run the compute on the default stream. The two are independent, so they overlap freely. The only dependency is the join (sum) where you first consume both tensors. Synchronize both streams before consuming with `default_stream.wait_stream(copy_stream)`, as otherwise you might run into a data race (sum consumes tensor before the copy finishes).
 
-Suggested synchronization shape:
+**Note**:
 
-```python
-copy_stream = torch.cuda.Stream()
-
-with torch.cuda.stream(copy_stream):
-    with nvtx_range("h2d_copy"):
-        batch_gpu = batch_cpu.to("cuda", non_blocking=True)
-        batch_gpu.record_stream(copy_stream)
-
-with nvtx_range("independent_compute"):
-    run_compute_that_does_not_use_batch()
-
-torch.cuda.current_stream().wait_stream(copy_stream)
-with nvtx_range("consume_copied_batch"):
-    use(batch_gpu)
-```
+- The CPU tensor should be allocated with `pin_memory=True` (see last task of this exercise).
+- reuse the `matmul(..., out=)` pattern from Exercise 1.
+- Label the regions with NVTX ranges (`h2d_copy`, `compute`) so the copy and the matmul are easy to find in Nsight Systems.
 
 Run/profile:
 
@@ -137,10 +121,14 @@ Run/profile:
 make exercise-02
 ```
 
-Prove:
+Prove (the GPU timeline is the source of truth):
 
-- Nsight Systems shows an HtoD memcpy overlapping compute kernels.
-- Removing pinned memory or consuming the copied tensor too early reduces overlap or introduces synchronization.
+- **Sequential**: the HtoD memcpy finishes before the compute kernels start.
+- **Overlap**: the memcpy and the compute kernels sit on different streams and overlap horizontally, and the overlapped region is faster: closer to `max(copy_time, compute_time)` than `copy_time + compute_time`.
+- **Pinned memory matters**: drop `pin_memory=True` and `non_blocking=True` silently becomes a no-op. The copy goes synchronous and the overlap disappears.
+- **The join wait is a contract, not an option**: without `wait_stream` the result can still *look* correct, but only as long as `copy_time < compute_time`, because the join (running on the default stream) is gated by the compute. Grow the copy past the compute and the consumed tensor comes back wrong, silently, with no error. The `wait_stream` is what makes it correct for every sizing.
+
+Note: unlike Exercise 1, overlapping here makes the whole region faster. What's different about a host-to-device copy paired with a GEMM, versus two GEMMs?
 
 ## Exercise 3: Async NCCL All-Reduce
 
@@ -179,12 +167,12 @@ Implement:
 
 - A small multilayer MLP.
 - A naive manual data-parallel baseline that runs `loss.backward()` fully, then reduces gradients.
-- A manual bucketed version using autograd hooks: group parameters into buckets; when all gradients in a bucket are ready, flatten that bucket and launch `dist.all_reduce(..., async_op=True)`.
+- A manual bucketed version using autograd hooks: group parameters into buckets. When all gradients in a bucket are ready, flatten that bucket and launch `dist.all_reduce(..., async_op=True)`.
 - A wait for all outstanding reductions before `optimizer.step()`.
 - A comparison against real `torch.nn.parallel.DistributedDataParallel` with a small `bucket_cap_mb`.
 - NVTX ranges for `forward`, `backward`, `bucket_<n>_all_reduce_launch`, `bucket_<n>_wait`, and `optimizer_step`.
 
-Start with two buckets, for example early layers in one bucket and later layers in another. The goal is not to build a production reducer; the goal is to see communication for one bucket begin before the whole backward pass has finished.
+Start with two buckets, for example early layers in one bucket and later layers in another. The goal is not to build a production reducer. The goal is to see communication for one bucket begin before the whole backward pass has finished.
 
 Run/profile:
 

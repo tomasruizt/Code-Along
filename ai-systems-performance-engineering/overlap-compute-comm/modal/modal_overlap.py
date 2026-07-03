@@ -36,17 +36,19 @@ image = (
         remote_path=f"{REMOTE_ROOT}/requirements.txt",
         copy=True,
     )
-    .run_commands(f"python -m pip install --break-system-packages -r {REMOTE_ROOT}/requirements.txt")
-    .add_local_dir(
-        str(LOCAL_ROOT / "scripts"),
-        remote_path=f"{REMOTE_ROOT}/scripts",
-        copy=True,
-        ignore=["__pycache__", "*.pyc"],
+    .run_commands(
+        f"python -m pip install --break-system-packages -r {REMOTE_ROOT}/requirements.txt"
     )
     .add_local_file(
         str(LOCAL_ROOT / "modal" / "nsys_wrapper.py"),
         remote_path=f"{REMOTE_ROOT}/modal/nsys_wrapper.py",
         copy=True,
+    )
+    .add_local_dir(
+        str(LOCAL_ROOT / "scripts"),
+        remote_path=f"{REMOTE_ROOT}/scripts",
+        copy=True,
+        ignore=["__pycache__", "*.pyc"],
     )
 )
 
@@ -111,7 +113,9 @@ def profile_single_gpu(script: str, name: str) -> None:
     print(f"Report saved to Modal volume: nsys/{name}.nsys-rep", flush=True)
 
 
-@app.function(gpu=f"{GPU}:2", image=image, volumes={VOLUME_PATH: volume}, timeout=30 * 60)
+@app.function(
+    gpu=f"{GPU}:2", image=image, volumes={VOLUME_PATH: volume}, timeout=30 * 60
+)
 def profile_two_gpu(script: str, name: str) -> None:
     _print_system_info()
     report_dir = f"{VOLUME_PATH}/nsys"
@@ -135,7 +139,10 @@ def profile_two_gpu(script: str, name: str) -> None:
         ]
     )
     volume.commit()
-    print(f"Reports saved to Modal volume: nsys/{name}-rank0.nsys-rep, nsys/{name}-rank1.nsys-rep", flush=True)
+    print(
+        f"Reports saved to Modal volume: nsys/{name}-rank0.nsys-rep, nsys/{name}-rank1.nsys-rep",
+        flush=True,
+    )
 
 
 @app.local_entrypoint()
