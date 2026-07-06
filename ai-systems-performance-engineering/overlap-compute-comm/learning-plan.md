@@ -134,16 +134,127 @@ Note: unlike Exercise 1, overlapping here makes the whole region faster. What's 
 
 File: `scripts/03_manual_async_allreduce.py`
 
-Goal: learn the difference between CPU-side async launch and real GPU-side overlap for NCCL collectives.
+Goal: manually overlap an NCCL all-reduce with independent backward compute, and verify the overlap in Nsight Systems.
 
-Implement:
+Build a two-rank toy data-parallel training step using plain CUDA tensors. Do not use `nn.Module`, `loss.backward()`, or DDP; the backward GEMMs and collective launches should be explicit in the script.
 
-- Two-rank `torch.distributed` setup with backend `nccl`.
-- Use `LOCAL_RANK` to select the CUDA device, initialize the process group, and allocate one large tensor that represents a gradient bucket.
-- A synchronous baseline: run independent compute, call blocking `dist.all_reduce(bucket)`, then run another compute block.
-- An async version: launch `work = dist.all_reduce(bucket, async_op=True)`, run independent compute that does not read or write `bucket`, then call `work.wait()` before using `bucket`.
-- Print rank-local timings from both ranks after profiling. Make sure every rank follows the same collective order.
-- NVTX ranges named `all_reduce_sync`, `all_reduce_async_launch`, `independent_compute`, and `all_reduce_wait`.
+Use a bias-free two-layer MLP:
+
+```python
+z = x @ w1
+h = torch.relu(z)
+y = h @ w2
+```
+
+For squared error, compute the gradients manually:
+
+```python
+grad_y = y - target
+grad_w2 = h.T @ grad_y
+grad_h = grad_y @ w2.T
+grad_z = grad_h * (z > 0)
+grad_w1 = x.T @ grad_z
+```
+
+<details>
+<summary>Where do these gradients come from?</summary>
+
+Use the squared-error loss:
+
+$$
+L = \frac{1}{2}\lVert Y - T \rVert_F^2
+$$
+
+The output gradient is:
+
+$$
+\frac{\partial L}{\partial Y} = Y - T
+$$
+
+In code:
+
+```python
+grad_y = y - target
+```
+
+For the second layer, $Y = HW_2$. Its differential is:
+
+$$
+dY = dH\,W_2 + H\,dW_2
+$$
+
+Using the Frobenius inner product definition of a matrix gradient,
+
+$$
+dL = \left\langle dY, \frac{\partial L}{\partial Y} \right\rangle_F
+$$
+
+gives:
+
+$$
+\frac{\partial L}{\partial W_2} = H^\top \frac{\partial L}{\partial Y},
+\qquad
+\frac{\partial L}{\partial H} = \frac{\partial L}{\partial Y} W_2^\top
+$$
+
+In code:
+
+```python
+grad_w2 = h.T @ grad_y
+grad_h = grad_y @ w2.T
+```
+
+Backpropagate through ReLU:
+
+$$
+\frac{\partial L}{\partial Z}
+= \frac{\partial L}{\partial H} \odot \mathbf{1}_{Z > 0}
+$$
+
+In code:
+
+```python
+grad_z = grad_h * (z > 0)
+```
+
+For the first layer, $Z = XW_1$, so:
+
+$$
+\frac{\partial L}{\partial W_1} = X^\top \frac{\partial L}{\partial Z}
+$$
+
+In code:
+
+```python
+grad_w1 = x.T @ grad_z
+```
+
+</details>
+
+The key dependency is that `grad_w2` is ready before `grad_w1`. Start reducing `grad_w2` as soon as it is computed, continue computing `grad_h`, `grad_z`, and `grad_w1`, then wait for the reduction before updating `w2`. This is the manual version of the overlap DDP tries to create automatically with gradient buckets.
+
+Implementation requirements:
+
+- Initialize `torch.distributed` with backend `nccl`.
+- Read `LOCAL_RANK`, `RANK`, and `WORLD_SIZE` from the `torchrun` environment.
+- Call `torch.cuda.set_device(local_rank)` before allocating CUDA tensors.
+- Allocate tensors on `torch.device("cuda", local_rank)`.
+- Initialize `w1` and `w2` identically on both ranks, but use rank-local input data.
+- Use `dist.all_reduce(grad_w2, op=dist.ReduceOp.AVG, async_op=True)` immediately after `grad_w2` is computed.
+- Compute `grad_w1` while the `grad_w2` all-reduce is outstanding.
+- Reduce `grad_w1` too before the weight update. It can also use `async_op=True`, but it is not the overlap being studied.
+- Wait for each gradient's reduction before updating the corresponding weight with manual gradient descent.
+- Every rank must call collectives in the same order.
+
+Use NVTX ranges around the training step and any phases you want to inspect.
+
+Size the tensors so the `grad_w2` all-reduce and the remaining backward GEMMs take comparable time. If one side is tiny, there is little overlap to see.
+
+Synchronization notes:
+
+- `async_op=True` returns a `Work` handle. Do not use the reduced value from the host or update the corresponding weight until `work.wait()` has completed.
+- `dist.all_reduce(..., async_op=False)` and `torch.distributed.barrier()` should not be treated as host-side GPU drains. If you need a clean profiling boundary, use `torch.cuda.synchronize()` before `cudaProfilerStart()` and before `cudaProfilerStop()`.
+- Do not put `torch.cuda.synchronize()` inside the training step unless you are intentionally destroying the overlap.
 
 Run/profile:
 
@@ -151,28 +262,30 @@ Run/profile:
 make exercise-03
 ```
 
-Prove:
+Prove (the GPU timeline is the source of truth):
 
-- NCCL kernels overlap independent compute kernels in each rank's trace.
-- The async version is faster than the synchronous baseline when communication and compute durations are balanced.
-- `async_op=True` alone is not counted as proof unless the GPU timeline shows overlap.
+- NCCL kernels for the `grad_w2` all-reduce overlap horizontally with the GEMM kernels for the remaining backward compute.
+- The overlap is visible on both ranks, not just in Python timings.
+- Each weight update happens after the corresponding gradient's all-reduce wait.
+- API-level `async_op=True` is not enough by itself; the Nsight Systems GPU timeline must show actual communication/compute overlap.
 
 ## Exercise 4: Tiny DDP-Style Gradient Buckets
 
 File: `scripts/04_tiny_ddp_bucket_overlap.py`
 
-Goal: reproduce the core DDP idea: launch communication for ready gradient buckets while backward compute continues for other layers.
+Goal: generalize Exercise 3's hand-scheduled overlap into DDP-style scheduling: backward runs normally, gradients become ready at different times, and communication launches automatically when a bucket is ready.
 
-Implement:
+Use a small multilayer MLP with enough layers that backward takes visible time in Nsight Systems. In Exercise 3, you manually placed one all-reduce between two backward compute blocks because you knew exactly when `grad_w2` was ready. Here, let autograd tell you when gradients are ready. Start with two gradient buckets, for example early layers in one bucket and later layers in another. The goal is not to build a production reducer. The goal is to see communication launch from gradient readiness instead of from a hand-written backward schedule.
 
-- A small multilayer MLP.
-- A naive manual data-parallel baseline that runs `loss.backward()` fully, then reduces gradients.
-- A manual bucketed version using autograd hooks: group parameters into buckets. When all gradients in a bucket are ready, flatten that bucket and launch `dist.all_reduce(..., async_op=True)`.
-- A wait for all outstanding reductions before `optimizer.step()`.
-- A comparison against real `torch.nn.parallel.DistributedDataParallel` with a small `bucket_cap_mb`.
-- NVTX ranges for `forward`, `backward`, `bucket_<n>_all_reduce_launch`, `bucket_<n>_wait`, and `optimizer_step`.
+Implement three variants:
 
-Start with two buckets, for example early layers in one bucket and later layers in another. The goal is not to build a production reducer. The goal is to see communication for one bucket begin before the whole backward pass has finished.
+- **Naive manual data parallel**: run `loss.backward()` fully, then flatten and all-reduce the gradients after all backward compute is done. This is the baseline: gradient communication starts late.
+- **Manual bucketed overlap**: group parameters into buckets and register autograd hooks on their gradients. When all gradients in a bucket are ready, flatten that bucket and launch `dist.all_reduce(..., async_op=True)`. Keep the reduced flat buffer alive until the work completes, and copy the averaged values back into the original gradients before `optimizer.step()`.
+- **Real DDP comparison**: wrap the same model with `torch.nn.parallel.DistributedDataParallel` and use a small `bucket_cap_mb` so PyTorch creates small buckets. This gives you a reference trace for the optimized reducer behavior.
+
+Wait for all outstanding bucket reductions before `optimizer.step()`. Every rank must build the same buckets and launch collectives in the same order. Print rank-local timings and a small loss or gradient checksum after profiling so the three variants can be compared.
+
+Label the phases with NVTX ranges: `forward`, `backward`, `bucket_<n>_all_reduce_launch`, `bucket_<n>_wait`, and `optimizer_step`.
 
 Run/profile:
 
@@ -180,8 +293,9 @@ Run/profile:
 make exercise-04
 ```
 
-Prove:
+Prove (the GPU timeline is the source of truth):
 
-- In the naive version, NCCL all-reduces appear mostly after backward compute.
-- In the bucketed version, earlier NCCL kernels appear during later backward compute.
-- The real DDP trace resembles the manual bucketed version, with PyTorch's optimized reducer behavior.
+- **Naive**: NCCL all-reduces appear mostly after backward compute, because communication does not start until `loss.backward()` has returned.
+- **Manual bucketed overlap**: ready bucket all-reduces begin while remaining backward kernels are still running, so NCCL work overlaps horizontally with backward compute.
+- **Real DDP**: the DDP trace resembles the manual bucketed version, but with PyTorch's optimized reducer behavior and bucket scheduling.
+- **The bucket boundary matters**: if one bucket contains almost all parameters, there is little or no overlap to see. Adjust the bucket split so one bucket becomes ready while useful backward work remains.
